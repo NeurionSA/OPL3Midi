@@ -1,0 +1,35 @@
+CC = wpp386
+CL = wcl386
+# the /zp1 flag forces structures to NEVER pad elements, so the layout of
+# a structure will be EXACTLY as it appears in code
+# the /q flag forces the compiler and linker to display less useless lines
+# the /l=dos4g flag forces the linker to generate code for DOS/4GW and embed
+# the DOS/4GW runtime in the binary
+CFLAGS = /zp1 /q
+LDFLAGS = /l=dos4g /q
+
+PROG = playmidi.exe
+HDRS = midi.h globals.h opl3.h
+SRCS = main.cpp midi.cpp opl3.cpp
+
+OBJS = $(SRCS:.cpp=.obj)
+
+$(PROG) : $(OBJS)
+  $(CL) $(LDFLAGS) -fe=$(PROG) $(OBJS)
+
+# define CPP compile behaviors (this is the argument called on all out-of-date .cpp files)
+.cpp.obj:
+  $(CC) $(CFLAGS) $*.cpp
+
+# dependencies
+
+main.obj : main.cpp midi.h globals.h opl3.h
+
+midi.obj : midi.cpp midi.h globals.h opl3.h
+
+opl3.obj : opl3.cpp opl3.h globals.h
+
+# cleanup command (MAKE clean)
+clean : .SYMBOLIC
+  del *.obj
+  del *.err
