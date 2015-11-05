@@ -20,7 +20,7 @@
 
 // This function prints the program's usage/help
 void     printUsage () {
-   printf( "USAGE: PLAYMIDI filename [/P patch-bank ...] [/T tempo]\n" );
+   printf( "USAGE: PLAYMIDI filename [/P patch-bank ...]\n" );
    printf( "  %-14s %s\n", "filename", "The MIDI file to play" );
    printf( "  %-14s %s\n", "/P patch-bank [...]", "Load alternate bank from file 'patch-bank'" );
 }
