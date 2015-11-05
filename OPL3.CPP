@@ -242,7 +242,7 @@ void     initRegs () {
 
 // updates a voice to reflect changes to its note frequency, volume, pan, etc.
 //    BYTE     v = the index of the voice to update
-//    BYTE     flags = flags that determine what will be updated (for quicker exectuion)
+//    BYTE     flags = flags that determine what will be updated (for quicker execution)
 void     updateVoice ( BYTE v, BYTE flags ) {
    BYTE     i;          // base index into the chOpPairs table for this voice
    WORD     regOff;     // cached register offset
@@ -610,7 +610,7 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
                   channels[ chan ].rpPitchBendCent = value;
                }
                // TODO: Update frequencies of any active notes on this channel IF the Pitch Bend is currently not default
-               // May not need to occur because I've yet to see a MIDI file that sets this before any notes play
+               // May not need to occur because I've yet to see a MIDI file that sets this after any notes play
                break;
 
             default:
