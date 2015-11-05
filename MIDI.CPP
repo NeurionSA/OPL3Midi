@@ -57,7 +57,7 @@ WORD        division;      // timing division (d-time units per quarter note)
 MidiTrack   tracks[ MAX_TRACKS ];	// Midi Track data for playback
 BYTE        curTrack;      // current track being handled
 WORD        tracksDone;    // the number of tracks that have finished processing
-DWORD       tempo;         // the current tempo setting (microseconds per quarter note)
+DWORD       usPerQNote;    // the current tempo setting (microseconds per quarter note)
 DWORD       deltaNext;     // d-time ticks until the next MIDI event fires
 volatile DWORD deltaCounter;  // the counter for elapsed d-ticks
 volatile BYTE updateFlag;    // flag is set when a timer tick has been received
@@ -96,16 +96,20 @@ void     processEvents () {
    BYTE     subType;    // event's sub-type (for Meta events)
    BYTE     b;          // byte scratchpad
    
-   // decrement the tracks' d-times
-   for ( i = 0; i < numTracks; i++ ) {
-      tracks[ i ].timeToNextEvent -= deltaNext;
-   }
-   
-   // decement the delta counter
-   deltaCounter -= deltaNext;
-   
-   // try to perform as many concurrent events as possible
+   // perform as many events as possible given the current d-time
    do {
+      // decrement all active tracks' d-times, so long as the next event's d-time is non-zero
+      if ( deltaNext > 0 ) {
+         for ( i = 0; i < numTracks; i++ ) {
+            if ( tracks[ i ].status != 0 ) {
+               tracks[ i ].timeToNextEvent -= deltaNext;
+            }
+         }
+
+         // and decrement the delta counter as well
+         deltaCounter -= deltaNext;
+      }
+      
       // get the event's type
       eventType = midiData[ CUR_OFFSET ];
       CUR_OFFSET++;
@@ -204,13 +208,13 @@ void     processEvents () {
                         // assume the event's length is correct
                         CUR_OFFSET++;
                         // get the new tempo (3-byte MSB)
-                        tempo = ( midiData[ CUR_OFFSET ] << 16 ) |
+                        usPerQNote = ( midiData[ CUR_OFFSET ] << 16 ) |
                            ( midiData[ CUR_OFFSET + 1 ] << 8 ) |
                            ( midiData[ CUR_OFFSET + 2 ] );
                         // increment the track offset
                         CUR_OFFSET += 3;
                         // calculate the new timer reload value
-                        timerReload = ( 596591.0 * tempo ) / ( 500000.0 * division );
+                        timerReload = ( 596591.0 * usPerQNote ) / ( 500000.0 * division );
                         // reprogram the PIT with the new reload value
 								_disable();
                         outp( 0x43, 0x34 );
@@ -283,8 +287,8 @@ void     processEvents () {
       // store the d-time until the next event
       deltaNext = tracks[ curTrack ].timeToNextEvent;
       
-      // loop until the next event's d-time is non-zero
-   } while ( deltaCounter > deltaNext );
+      // loop as long as the next event is within the scope of the delta counter
+   } while ( deltaCounter >= deltaNext );
 }
 
 // Initializes the player and prepares it for use
@@ -470,12 +474,12 @@ int      MIDI_Rewind () {
    // if no file has been loaded then abort
    if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
    
-   // set the tempo to the default tempo
-   tempo = 500000;
+   // set the tempo to the default
+   usPerQNote = 500000;
    // set the number of completed tracks to 0
    tracksDone = 0;
    // calculate the value to reload the PIT with
-   timerReload = ( 596591.0 * tempo ) / ( 500000.0 * division );
+   timerReload = ( 596591.0 * usPerQNote ) / ( 500000.0 * division );
    // clear the update request flag
    updateFlag = 0;
    // iterate through the tracks and reset them
