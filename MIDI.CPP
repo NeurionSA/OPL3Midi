@@ -19,6 +19,7 @@
 #define  MAX_TRACKS        32          // max number of tracks player supports
 #define  MAX_DELTA_TIME    0xFFFFFF    // the maximum possible d-time
 #define  MAX_FILE_SIZE     0x40000     // maximum file size (256 KB)
+#define  MAX_STOP_TIME     1800        // maximum time that can be specified for MIDI stop (30 minutes)
 
 /******** MACROS ********/
 #define  CUR_OFFSET        tracks[curTrack].curOffset
@@ -36,6 +37,7 @@ typedef struct MidiTrack {
 /******** FUNCTION DECLARATIONS ********/
 // (for functions not declared in the header)
 void __interrupt __far timerHandler ();   // real-mode handler for the PIT interrupt
+void     resetPIT ();            // restores the PIT behavior and interrupt vector to normal
 void     processEvents ();       // processes queued MIDI events
 
 /******** VARIABLES ********/
@@ -61,6 +63,8 @@ DWORD       usPerQNote;    // the current tempo setting (microseconds per quarte
 DWORD       deltaNext;     // d-time ticks until the next MIDI event fires
 volatile DWORD deltaCounter;  // the counter for elapsed d-ticks
 volatile BYTE updateFlag;    // flag is set when a timer tick has been received
+DWORD       endPlayTime;         // time when the MIDI should automatically stop playing, measured in PIT ticks (1,193,182 per second)
+volatile DWORD elapsedTime;      // elapsed playback time, measured in PIT ticks (1,193,182 per second)
 
 /******** FUNCTION DEFINITIONS ********/
 
@@ -73,6 +77,8 @@ void __interrupt __far timerHandler () {
    updateFlag = 1;
    // increment the delta counter
    deltaCounter++;
+   // increment the elapsed time counter by the value we loaded into the timer
+   elapsedTime += timerReload;
    
    // increment the tick counter by the value we loaded into the timer
    clockTicks += timerReload;
@@ -87,6 +93,20 @@ void __interrupt __far timerHandler () {
       // we didn't call the BIOS handler so acknowledge the interrupt
       outp( 0x20, 0x20 );
    }
+}
+
+// restores the PIT behavior and interrupt vector to normal
+void     resetPIT () {
+   // disable interrupts while we reprogram the PIT
+   _disable();
+   // set the reload value to default
+   outp( 0x43, 0x34 );
+   outp( 0x40, 0x00 );
+   outp( 0x40, 0x00 );
+   // restore the BIOS vector
+   _dos_setvect( 0x08, biosTimerHandler );
+   // re-enable interrupts
+   _enable();
 }
 
 // processes queued MIDI events
@@ -266,13 +286,8 @@ void     processEvents () {
       if ( tracksDone >= numTracks ) {
          // playback has stopped
          filePlaying = FALSE;
-         // restore the PIT interval and handler
-         _disable();
-         outp( 0x43, 0x34 );
-         outp( 0x40, 0x00 );
-         outp( 0x40, 0x00 );
-         _dos_setvect( 0x08, biosTimerHandler );
-         _enable();
+         // restore the PIT
+         resetPIT();
          // break out of the loop
          break;
       }
@@ -300,6 +315,7 @@ int      MIDI_Init () {
    // set default values
    clockTicks = 0;
    timerReload = 0x10000;
+   endPlayTime = 0;
    // save the current DOS interrupt timer handler (vector 0x08)
    biosTimerHandler = _dos_getvect( 0x08 );
    
@@ -452,6 +468,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    
    // load was successful
    fileLoaded = TRUE;
+   // reset the end play time to 0 (ignored)
+   endPlayTime = 0;
    
    // rewind the MIDI to prepare it for play
    MIDI_Rewind();
@@ -480,6 +498,8 @@ int      MIDI_Rewind () {
    tracksDone = 0;
    // calculate the value to reload the PIT with
    timerReload = ( 596591.0 * usPerQNote ) / ( 500000.0 * division );
+   // reset the elapsed time
+   elapsedTime = 0;
    // clear the update request flag
    updateFlag = 0;
    // iterate through the tracks and reset them
@@ -560,13 +580,8 @@ int      MIDI_Stop () {
    // if file is not playing then abort
    if ( !filePlaying ) return ( MIDI_ERR_NOT_PLAYING );
    
-   // restore the PIT to normal
-   _disable();
-   outp( 0x43, 0x34 );
-   outp( 0x40, 0x00 );
-   outp( 0x40, 0x00 );
-   _dos_setvect( 0x08, biosTimerHandler );
-   _enable();
+   // restore the PIT
+   resetPIT();
    
    // stop playback of all notes
    OPL3_AllNotesOff();
@@ -590,13 +605,8 @@ int      MIDI_Pause () {
    // if file is not playing then abort
    if ( !filePlaying ) return ( MIDI_ERR_NOT_PLAYING );
    
-   // restore the PIT to normal
-   _disable();
-   outp( 0x43, 0x34 );
-   outp( 0x40, 0x00 );
-   outp( 0x40, 0x00 );
-   _dos_setvect( 0x08, biosTimerHandler );
-   _enable();
+   // restore the PIT
+   resetPIT();
    
    // stop playback of all notes
    OPL3_AllNotesOff();
@@ -615,16 +625,8 @@ int      MIDI_ShutDown () {
    // if the player hasn't been Inited yet abort
    if ( !inited ) return ( MIDI_ERR_NOT_INITED );
    
-   // disable interrupts while we reprogram the PIT to its default behavior
-   _disable();
-   // restore the normal clock frequency
-   outp( 0x43, 0x34 );
-   outp( 0x40, 0x00 );
-   outp( 0x40, 0x00 );
-   // restore the interrupt handler
-   _dos_setvect( 0x08, biosTimerHandler );
-   // re-enable interrupts
-   _enable();
+   // restore the PIT
+   resetPIT();
    
    // shut down/reset OPL3 driver by calling init on it
    OPL3_Init();
@@ -654,5 +656,41 @@ void     MIDI_Update () {
          // process MIDI events
          processEvents();
       }
+
+      // if a play time limit was set, check if we've reached it
+      if ( endPlayTime != 0 ) {
+         if ( elapsedTime >= endPlayTime ) {
+            // we have, so restore the PIT
+            resetPIT();
+            // turn off all notes
+            OPL3_AllNotesOff();
+            // and clear the filePlaying flag
+            filePlaying = FALSE;
+         }
+      }
    }
+}
+
+// Sets the time, in seconds, at which the MIDI should be prematurely stopped
+//    WORD  seconds      Time in seconds when the MIDI should stop playing
+// Note that accuracy of the stop time is dependent on MIDI_Update being called frequently,
+// because the check for stopping is made there
+// Returns an error code on failure
+int      MIDI_SetPlayTime ( WORD seconds ) {
+
+   // if the player hasn't been Inited yet abort
+   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   // if the file is currently playing abort
+   if ( filePlaying ) return ( MIDI_ERR_PLAYING );
+   // if no file has been loaded then abort
+   if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
+
+   // return an error if the provided value was too high
+   if ( seconds > MAX_STOP_TIME ) return ( MIDI_ERR_BAD_ARGUMENT );
+
+   // set the variable (measured in PIT clock ticks)
+   endPlayTime = seconds * 1193182;
+
+   // return success
+   return ( MIDI_OK );
 }

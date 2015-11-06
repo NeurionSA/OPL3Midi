@@ -21,6 +21,7 @@
 #define  MIDI_ERR_NOT_INITED     10    // the MIDI player has not been initialized yet
 #define  MIDI_ERR_GENERIC        11    // generic error
 #define  MIDI_ERR_NOT_PLAYING    12    // function can't complete because file is not playing
+#define  MIDI_ERR_BAD_ARGUMENT   13    // an argument supplied to the function is bad or out-of-bounds
 
 /******** MIDI player functions ********/
 
@@ -43,5 +44,7 @@ BOOL     MIDI_IsPlaying ();
 // this function should be called periodically (ideally many times a frame) to service
 // the MIDI driver and handle new event ticks
 void     MIDI_Update ();
+// sets the time, in seconds, at which the MIDI should be prematurely stopped
+int      MIDI_SetPlayTime ( WORD seconds );
 
 #endif
