@@ -119,7 +119,7 @@ void     processEvents () {
    // perform as many events as possible given the current d-time
    do {
       // decrement all active tracks' d-times, so long as the next event's d-time is non-zero
-      if ( deltaNext > 0 ) {
+      if ( deltaNext ) {
          for ( i = 0; i < numTracks; i++ ) {
             if ( tracks[ i ].status != 0 ) {
                tracks[ i ].timeToNextEvent -= deltaNext;
@@ -218,7 +218,7 @@ void     processEvents () {
                         CUR_OFFSET++;
                         // set the track to done to stop processing it
                         tracks[ curTrack ].status = 0;
-                        // and set its time to next event obscenely high to avoid it processing in the timer code
+                        // set its end-time to max so it'll be passed up for newer tracks
                         tracks[ curTrack ].timeToNextEvent = MAX_DELTA_TIME;
                         // increment the number of completed tracks
                         tracksDone++;
@@ -656,9 +656,9 @@ void     MIDI_Update () {
          // process MIDI events
          processEvents();
       }
-
+      
       // if a play time limit was set, check if we've reached it
-      if ( endPlayTime != 0 ) {
+      if ( endPlayTime ) {
          if ( elapsedTime >= endPlayTime ) {
             // we have, so restore the PIT
             resetPIT();

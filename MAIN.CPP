@@ -133,19 +133,18 @@ int      main ( int argc, char **argv ) {
    }
 
    // set the End time for the MIDI if one was provided
-   if ( endTimeSec != 0 ) {
+   if ( endTimeSec ) {
       MIDI_SetPlayTime( endTimeSec );
    }
-
+   
    // test playing
    if ( midiStatus == MIDI_OK ) {
       MIDI_Play();
-
       // loop while we wait for the player to finish
       do {
          // have the MIDI driver service itself if it needs to
          MIDI_Update();
-
+         
          // abort if a key is pressed
          if ( kbhit() ) {
             key = getch();

@@ -23,6 +23,8 @@
 #define  PAN_MASK_R        0xEF  // left bit clear
 #define  PAN_MASK_C        0xFF  // no bits clear
 
+#define  MOD_THRESHOLD     0x40  // if the Modulation (MSB) is >= this value then force voice's vibrato bits on
+
 // voice statuses
 #define  VOICE_FREE        0     // voice is free for use
 #define  VOICE_KEYON       1     // voice is currently in use and in Key-On
@@ -31,7 +33,8 @@
 #define  UPDATE_FREQ       0x01  // update voice's frequency
 #define  UPDATE_VOLUME     0x02  // update voice's volume
 #define  UPDATE_PAN        0x04  // update voice's pan
-#define  UPDATE_ALL        0x07  // update all the voice's settings
+#define  UPDATE_MOD        0x08  // update voice's modulation setting
+#define  UPDATE_ALL        0x0F  // update all the voice's settings
 
 /******** STRUCTS ********/
 // Patch definition, loaded from a bank file
@@ -63,6 +66,8 @@ typedef struct MidiChannel {
    BYTE  volume;        // Channel's volume controller (only MSB is used)
    BYTE  pan;           // Channel's pan controller (MSB only)
    BYTE  expression;    // Channel's expression controller (MSB only)
+   BYTE  modulation;    // Channel's modulation controller (MSB only)
+   BYTE  sustainPedal;  // Channel's sustain pedal (0 or 1)
    // Pitch Bend Settings
    WORD  pitchBend;     // Channel's raw pitch bend value
    SBYTE pbSemi;        // Channel's calculated pitch bended semi-note transposition (signed)
@@ -82,7 +87,9 @@ typedef struct Opl3Voice {
    BYTE  noteKey;             // MIDI note the voice currently represents
    BYTE  noteVelocity;        // velocity of the MIDI note
    BYTE  patch;               // index of the patch currently loaded into the voice
+   // register shadows
    BYTE  shadowKBF;           // shadowed copy of KBF register for quick Key-Off
+   BYTE  shadowFMult[ 2 ];    // shadowed copy of both operators' Trem, Vib, Sust, KSR, F-Mult registers for Modulation controller
 } Opl3Voice;
 
 /******** FUNCTION DECLARATIONS ********/
@@ -246,35 +253,44 @@ void     initRegs () {
 void     updateVoice ( BYTE v, BYTE flags ) {
    BYTE     i;          // base index into the chOpPairs table for this voice
    WORD     regOff;     // cached register offset
-   WORD     atten;      // attenuation to use for the note
-   BYTE     regFNum;    // value to write for voice's F-Num low reg
-   BYTE     regKBF;     // value to write for the voice's Key-On, Block Num, Freq hi reg
-   WORD     freq;       // the calculated frequency of the note
-   int      semiTone;   // the calculated semi-tone of the note
-   SBYTE    octave;     // the calculated octave of the note
-   BYTE     fMult[2];   // new F-Mult values (if they need to change)
-   BYTE     panMask;    // pan mask to use
    
    // set the base index for operator pairs (voice * 2)
    i = v << 1;
    
    // if the volume flag is set
    if ( flags & UPDATE_VOLUME ) {
+      WORD     atten;      // attenuation to use for the note
+      WORD     baseAtten;  // base attenuation to use
+
       // determine the value that should be used for the carrier's attenuation
-      // add together all the attenutation sources (base patch, note velocity, channel volume, channel expression)
-      atten = ( patches[ voices[ v ].patch ].Op2KSAtt & 0x3F ) +
-         attenTable[ voices[ v ].noteVelocity ] +
+      // calculate base attenuation (note velocity, channel volume, channel expression)
+      baseAtten = attenTable[ voices[ v ].noteVelocity ] +
          attenTable[ channels[ voices[ v ].channel ].volume ] +
          attenTable[ channels[ voices[ v ].channel ].expression ];
+      // do the carrier's attenuation first
+      atten = ( patches[ voices[ v ].patch ].Op2KSAtt & 0x3F ) + baseAtten;
       // trim it to the max (0x3F)
       if ( atten > 0x3F ) atten = 0x3F;
       // write the carrier's attenuation register
       regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
       writeReg( 0x40 + regOff, ( patches[ voices[ v ].patch ].Op2KSAtt & 0xC0 ) | atten );
-   }
+
+      // if the patch is AM then we need to write to the other operator, too
+      if ( patches[ voices[ v ].patch ].ChPFb & 0x01 ) {
+         // the bit is set, so it's AM-synthesis
+         atten = ( patches[ voices[ v ].patch ].Op1KSAtt & 0x3F ) + baseAtten;
+         // trim it to the max (0x3F)
+         if ( atten > 0x3F ) atten = 0x3F;
+         // write the modulator's attenuation register
+         regOff = opRegOffset[ chOpPairs[ i ] ];
+         writeReg( 0x40 + regOff, (patches[ voices[ v ].patch ].Op1KSAtt & 0xC0) | atten );
+      }
+   }  // END UPDATE_VOLUME
    
    // if the pan flag is set
    if ( flags & UPDATE_PAN ) {
+      BYTE     panMask;    // pan mask to use
+
       // determine the pan mask to use
       if ( channels[ voices[ v ].channel ].pan <= PAN_THRESHOLD_L ) {
          panMask = PAN_MASK_L;
@@ -285,10 +301,43 @@ void     updateVoice ( BYTE v, BYTE flags ) {
       }
       // update the register
       writeReg( 0xC0 + chRegOffset[ v ], patches[ voices[ v ].patch ].ChPFb & panMask );
-   }
+   }  // END UPDATE_PAN
+
+   // if the modulation update flag is set
+   if ( flags & UPDATE_MOD ) {
+      // determine what state the operators' Vibrato flag should be based on the channel's modulation controller setting
+      if ( channels[ voices[ v ].channel ].modulation >= MOD_THRESHOLD ) {
+         // set the vibrato bits on both operators
+         voices[ v ].shadowFMult[ 0 ] = voices[ v ].shadowFMult[ 0 ] | 0x40;
+         voices[ v ].shadowFMult[ 1 ] = voices[ v ].shadowFMult[ 1 ] | 0x40;
+         // write the registers
+         regOff = opRegOffset[ chOpPairs[ i ] ];
+         writeReg( 0x20 + regOff, voices[ v ].shadowFMult[ 0 ] );
+         regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
+         writeReg( 0x20 + regOff, voices[ v ].shadowFMult[ 1 ] );
+
+      } else {
+         // use the patch's definition
+         voices[ v ].shadowFMult[ 0 ] = ( voices[ v ].shadowFMult[ 0 ] & 0xBF ) | ( patches[ voices[ v ].patch ].Op1FMult & 0x40 );
+         voices[ v ].shadowFMult[ 1 ] = ( voices[ v ].shadowFMult[ 1 ] & 0xBF ) | ( patches[ voices[ v ].patch ].Op2FMult & 0x40 );
+         // write the registers
+         regOff = opRegOffset[ chOpPairs[ i ] ];
+         writeReg( 0x20 + regOff, voices[ v ].shadowFMult[ 0 ] );
+         regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
+         writeReg( 0x20 + regOff, voices[ v ].shadowFMult[ 1 ] );
+
+      }
+   }  // END UPDATE_MOD
    
    // if the frequency flag is set
    if ( flags & UPDATE_FREQ ) {
+      BYTE     regFNum;    // value to write for voice's F-Num low reg
+      BYTE     regKBF;     // value to write for the voice's Key-On, Block Num, Freq hi reg
+      WORD     freq;       // the calculated frequency of the note
+      int      semiTone;   // the calculated semi-tone of the note
+      SBYTE    octave;     // the calculated octave of the note
+      BYTE     fMult[ 2 ];   // new F-Mult values (if they need to change)
+
       // determine the values to write for the channel's frequency and block bytes
       if ( voices[ v ].channel == 9 ) {
          // it's the percussion channel so we just get that straight from the patch
@@ -314,10 +363,12 @@ void     updateVoice ( BYTE v, BYTE flags ) {
          freq = freqTable[ ( semiTone << 4 ) + channels[ voices[ v ].channel ].pbFrac ];
          // restore the F-Mults to default if they should be normal now (octave is no longer one that needs F-Mult changes)
          if ( ( octave < 8 ) && voices[ v ].fMultChanged ) {
+            voices[ v ].shadowFMult[ 0 ] = (voices[ v ].shadowFMult[ 0 ] & 0xF0) | ( patches[ voices[ v ].patch ].Op1FMult & 0x0F );
+            voices[ v ].shadowFMult[ 1 ] = (voices[ v ].shadowFMult[ 1 ] & 0xF0) | ( patches[ voices[ v ].patch ].Op2FMult & 0x0F );
             regOff = opRegOffset[ chOpPairs[ i ] ];
-            writeReg( regOff + 0x20, patches[ voices[ v ].patch ].Op1FMult );
+            writeReg( regOff + 0x20, voices[ v ].shadowFMult[ 0 ] );
             regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
-            writeReg( regOff + 0x20, patches[ voices[ v ].patch ].Op2FMult );
+            writeReg( regOff + 0x20, voices[ v ].shadowFMult[ 1 ] );
             // clear the change flag
             voices[ v ].fMultChanged = 0;
          }
@@ -337,12 +388,15 @@ void     updateVoice ( BYTE v, BYTE flags ) {
                fMult[ 1 ] = freqMultDouble[ fMult[ 1 ] ];
                octave--;
             } while ( octave > 7 );
+            // update the shadows
+            voices[ v ].shadowFMult[ 0 ] = ( voices[ v ].shadowFMult[ 0 ] & 0xF0 ) | fMult[ 0 ];
+            voices[ v ].shadowFMult[ 1 ] = ( voices[ v ].shadowFMult[ 1 ] & 0xF0 ) | fMult[ 1 ];
             
             // write the new F-Mult register values
             regOff = opRegOffset[ chOpPairs[ i ] ];
-            writeReg( regOff + 0x20, ( ( patches[ voices[ v ].patch ].Op1FMult & 0xF0 ) | fMult[ 0 ] ) );
+            writeReg( regOff + 0x20, voices[ v ].shadowFMult[ 0 ] );
             regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
-            writeReg( regOff + 0x20, ( ( patches[ voices[ v ].patch ].Op2FMult & 0xF0 ) | fMult[ 1 ] ) );
+            writeReg( regOff + 0x20, voices[ v ].shadowFMult[ 1 ] );
             // record that the F-Mults have changed for this voice
             voices[ v ].fMultChanged = 1;
          }
@@ -360,7 +414,7 @@ void     updateVoice ( BYTE v, BYTE flags ) {
    
       // shadow the KBF in the voice's data for quick Key-Off
       voices[ v ].shadowKBF = regKBF;
-   }  // END if ( flags & UPDATE_FREQ )
+   }  // END UPDATE_FREQ
    
 }
 
@@ -393,6 +447,8 @@ int      OPL3_Init () {
       channels[ i ].volume = 100;         // ~80%
       channels[ i ].pan = 0x40;           // centered pan
       channels[ i ].expression = 0x7F;    // full expression
+      channels[ i ].modulation = 0;       // no modulation effect
+      channels[ i ].sustainPedal = 0;     // no sustain
       // pitch bend settings
       channels[ i ].pitchBend = 0x2000;   // centered pitch bend
       channels[ i ].pbSemi = 0;
@@ -469,6 +525,8 @@ void     OPL3_NoteOff ( BYTE chan, BYTE key, BYTE velocity ) {
    
    // if there are no active voices, for whatever reason, just return
    if ( numVoicesUsed == 0 ) return;
+   // if the sustain pedal is active for this channel then ignore the Note-Off
+   if ( channels[ chan ].sustainPedal ) return;
    
    // we won't bother cycling and will just search for the note sequentially
    v = 0xFF;   // sentinel value
@@ -560,6 +618,10 @@ void     OPL3_NoteOn ( BYTE chan, BYTE key, BYTE velocity ) {
       voices[ v ].patch = p;
       // clear the voice's fMultChanged bit
       voices[ v ].fMultChanged = 0;
+
+      // shadow necessary registers
+      voices[ v ].shadowFMult[ 0 ] = patches[ p ].Op1FMult;
+      voices[ v ].shadowFMult[ 1 ] = patches[ p ].Op2FMult;
    }
    
    // update the voice's information
@@ -594,6 +656,20 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
    
    // branch based on which controller was changed
    switch ( number ) {
+      case 0x01:  // Modulation Wheel (MSB)
+         // set the channel's modulation
+         channels[ chan ].modulation = value;
+         // loop through all the voices to find any active notes on this channel
+         for ( i = 0; i < NUM_VOICES; i++ ) {
+            // skip inactive notes
+            if ( voices[ i ].status != VOICE_KEYON ) continue;
+            if ( voices[ i ].channel == chan ) {
+               // update this voice's modulation
+               updateVoice( i, UPDATE_MOD );
+            }
+         }
+         break;
+
       case 0x06:  // Data Entry (MSB)
       case 0x26:  // Data Entry (LSB)
          // because we may need to react to any RPN change, the code is shared here
@@ -667,6 +743,24 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
          }
          break;
 
+      case 0x40:  // 0x40  Damper Pedal On/Off
+         // set the channel's sustain pedal
+         if ( value >= 64 ) {
+            channels[ chan ].sustainPedal = 1;
+         } else {
+            channels[ chan ].sustainPedal = 0;
+            // sustain was just released, so Note-Off should be sent for all active notes on the channel
+            for ( i = 0; i < NUM_VOICES; i++ ) {
+               // skip inactive notes
+               if ( voices[ i ].status != VOICE_KEYON ) continue;
+               if ( voices[ i ].channel == chan ) {
+                  // send the Note-Off
+                  OPL3_NoteOff( chan, voices[ i ].noteKey, 0x40 );
+               }
+            }
+         }
+         break;
+
       case 0x64:  // Registered Parameter Number (LSB)
          // set the LSB for the channel's selected RPN
          channels[ chan ].rpnIndexLsb = value;
@@ -712,7 +806,6 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
       default:
          // Unhandled/ignored controller numbers:
          // 0x00  Bank Select (MSB)
-         // 0x01  Modulation Wheel (MSB)
          // 0x02  Breath Controller (MSB)
          // 0x04  Foot Controller (MSB)
          // 0x05  Portamento Time (MSB)
@@ -738,7 +831,6 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
          // 0x31  General Purpose Controller 2 (LSB)
          // 0x32  General Purpose COntroller 3 (LSB)
          // 0x33  General Purpose Controller 4 (LSB)
-         // 0x40  Damper Pedal On/Off
          // 0x41  Portamento On/Off
          // 0x42  Sostenuto On/Off
          // 0x43  Soft Pedal On/Off
@@ -835,6 +927,8 @@ void     OPL3_ResetChanControllers ( BYTE chan ) {
    channels[ chan ].volume = 100;
    channels[ chan ].pan = 0x40;
    channels[ chan ].expression = 0x7F;
+   channels[ chan ].modulation = 0;
+   channels[ chan ].sustainPedal = 0;
    // reset Pitch Bend
    channels[ chan ].pitchBend = 0x2000;
    channels[ chan ].pbSemi = 0;
