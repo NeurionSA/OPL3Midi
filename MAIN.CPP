@@ -119,6 +119,8 @@ int      main ( int argc, char **argv ) {
    midiStatus = MIDI_LoadFile( argv[ midiFileIndex ] );
    // output the result to the console for debug purposes
    printf( "MIDI_LoadFile returned: %d\n", midiStatus );
+   // set the full voice mode
+   OPL3_SetFullVoiceMode( FULL_VOICE_OLDEST );
 
    // if no banks were passed, then load the default
    if ( numPatchFiles == 0 ) {

@@ -87,6 +87,7 @@ typedef struct Opl3Voice {
    BYTE  noteKey;             // MIDI note the voice currently represents
    BYTE  noteVelocity;        // velocity of the MIDI note
    BYTE  patch;               // index of the patch currently loaded into the voice
+   WORD  noteAge;             // age of the voice's note (increments for all voices everytime a Note-On occurs)
    // register shadows
    BYTE  shadowKBF;           // shadowed copy of KBF register for quick Key-Off
    BYTE  shadowFMult[ 2 ];    // shadowed copy of both operators' Trem, Vib, Sust, KSR, F-Mult registers for Modulation controller
@@ -100,6 +101,10 @@ void     writeReg ( WORD reg, BYTE data );
 void     initRegs ();
 // updates the note in the specified voice to reflect changes to its frequency or volume
 void     updateVoice ( BYTE v, BYTE flags );
+// performs a Note-On using the specified voice
+void     voiceNoteOn ( BYTE v, BYTE chan, BYTE key, BYTE velocity );
+// performs a Note-Off on the specified voice
+void     voiceNoteOff ( BYTE v, BYTE velocity );
 
 /******** VARIABLES ********/
 // lookup tables
@@ -221,6 +226,8 @@ MidiChannel    channels[ 16 ];   // Info and current state of the 16 MIDI channe
 Opl3Voice      voices[ NUM_VOICES ];	// Info and current state of the OPL3 channels
 BYTE           nextVoice;        // index of the next voice to try for a Key-On
 BYTE           numVoicesUsed;    // the number of voices currently in use
+BYTE           fullVoiceMode;    // behavior for dealing with Note-Ons while all voices are in use
+BOOL           opl3Inited = FALSE;   // whether the driver has been initialized
 
 /******** FUNCTION DEFINITIONS ********/
 
@@ -418,6 +425,88 @@ void     updateVoice ( BYTE v, BYTE flags ) {
    
 }
 
+// Performs a Note-On using the specified voice
+void     voiceNoteOn ( BYTE v, BYTE chan, BYTE key, BYTE velocity ) {
+   BYTE     p;          // index of the patch the new note needs to use
+   BYTE     i;          // base index into the chOpPairs table for this voice / loop iterator
+   WORD     regOff;     // cached register offset
+
+   // determine what patch the voice should use
+   // channel 9 (percussion) uses the new note's key with percussion bit set
+   if ( chan == 9 ) {
+      p = key | 0x80;
+   }
+   else {
+      p = channels[ chan ].patch;
+   }
+
+   // ignore this command if the note's patch is unused
+   if ( !patches[ p ].used ) return;
+
+   // check if the voice has the same patch as the new note
+   if ( voices[ v ].patch != p ) {
+      // set the base index for operator pairs (voice * 2)
+      i = v << 1;
+
+      // patch doesn't match, patch needs to be loaded into this voice
+      // get the register offset for operator 1 (Modulator) and write its regs
+      regOff = opRegOffset[ chOpPairs[ i ] ];
+      writeReg( 0x20 + regOff, patches[ p ].Op1FMult );
+      writeReg( 0x40 + regOff, patches[ p ].Op1KSAtt );
+      writeReg( 0x60 + regOff, patches[ p ].Op1AD );
+      writeReg( 0x80 + regOff, patches[ p ].Op1SR );
+      writeReg( 0xE0 + regOff, patches[ p ].Op1WF );
+
+      // get the register offset for operator 2 (Carrier) and write its regs
+      regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
+      writeReg( 0x20 + regOff, patches[ p ].Op2FMult );
+      // carrier's Attenuation register will be written later
+      writeReg( 0x60 + regOff, patches[ p ].Op2AD );
+      writeReg( 0x80 + regOff, patches[ p ].Op2SR );
+      writeReg( 0xE0 + regOff, patches[ p ].Op2WF );
+
+      // set the voice's patch index
+      voices[ v ].patch = p;
+      // clear the voice's fMultChanged bit
+      voices[ v ].fMultChanged = 0;
+
+      // shadow necessary registers
+      voices[ v ].shadowFMult[ 0 ] = patches[ p ].Op1FMult;
+      voices[ v ].shadowFMult[ 1 ] = patches[ p ].Op2FMult;
+   }
+
+   // update the voice's information
+   voices[ v ].status = VOICE_KEYON;
+   voices[ v ].channel = chan;
+   voices[ v ].noteKey = key;
+   voices[ v ].noteVelocity = velocity;
+   voices[ v ].noteAge = 0;
+
+   // increment the ages of all the used voices
+   for ( i = 0; i < NUM_VOICES; i++ ) {
+      if ( voices[ i ].status == VOICE_KEYON ) voices[ i ].noteAge++;
+   }
+
+   // call the updateVoice function on the voice, updating all
+   updateVoice( v, UPDATE_ALL );
+
+   // increment the number of used voices
+   numVoicesUsed++;
+   // cycle the next voice index
+   nextVoice = v + 1;
+   if ( nextVoice >= NUM_VOICES ) nextVoice -= NUM_VOICES;
+}
+
+// Performs a Note-Off on the specified voice
+void     voiceNoteOff ( BYTE v, BYTE velocity ) {
+   // set the voice's status to free
+   voices[ v ].status = VOICE_FREE;
+   // decrement the number of used voices
+   numVoicesUsed--;
+   // write the shadowed value to the register for quick Key-Off
+   writeReg( 0xB0 + chRegOffset[ v ], voices[ v ].shadowKBF );
+}
+
 // Initializes the OPL3 driver (must be called before any other functions)
 // Returns an error code on failure
 int      OPL3_Init () {
@@ -464,6 +553,10 @@ int      OPL3_Init () {
    nextVoice = 0;
    // set the number of used voices to 0
    numVoicesUsed = 0;
+   // set the default full voice behavior
+   fullVoiceMode = FULL_VOICE_IGNORE;
+
+   opl3Inited = TRUE;
    
    // return success
    return ( OPL3_OK );
@@ -479,6 +572,9 @@ int      OPL3_LoadPatchBank ( char * fileName, BOOL overlay ) {
    BYTE     patchIndex;    // patch index
    WORD     numPatches;    // number of patches to load
    WORD     i;             // for-loop iterator
+
+   // abort if the driver isn't inited yet
+   if ( !opl3Inited ) return ( OPL3_ERR_NOT_INITED );
    
    // open the patch bank
    hFile = fopen( fileName, "rb" );
@@ -546,20 +642,14 @@ void     OPL3_NoteOff ( BYTE chan, BYTE key, BYTE velocity ) {
    // if the voice is still the sentinel value, the note was not found so return
    if ( v == 0xFF ) return;
    
-   // set the voice's status to free
-   voices[ v ].status = VOICE_FREE;
-   // decrement the number of used voices
-   numVoicesUsed--;
-   // write the shadowed value to the register for quick Key-Off
-   writeReg( 0xB0 + chRegOffset[ v ], voices[ v ].shadowKBF );
+   // Note-Off the voice
+   voiceNoteOff( v, velocity );
 }
 
 // sends a Note-On command to the driver
 void     OPL3_NoteOn ( BYTE chan, BYTE key, BYTE velocity ) {
    BYTE     v;          // index of the voice we're checking/using
-   BYTE     p;          // index of the patch the new note needs to use
-   BYTE     i;          // base index into the chOpPairs table for this voice
-   WORD     regOff;     // cached register offset
+   int      i;          // for-loop iterator
    
    // if the velocity is 0, then treat it as a Note-Off with a velocity of 0x40
    if ( velocity == 0 ) {
@@ -567,77 +657,45 @@ void     OPL3_NoteOn ( BYTE chan, BYTE key, BYTE velocity ) {
       return;
    }
    
-   // if we've reached the maximum number of used voices, ignore this Note-On
-   // NOTE: We may wish to instead determine the oldest used voice and kill it instead
-   if ( numVoicesUsed == NUM_VOICES ) return;
-   
-   // determine what patch the voice should use
-   // channel 9 (percussion) uses the new note's key with percussion bit set
-   if ( chan == 9 ) {
-      p = key | 0x80;
-   } else {
-      p = channels[ chan ].patch;
-   }
-   
-   // ignore this command if the note's patch is unused
-   if ( !patches[ p ].used ) return;
-   
-   // cycle through the voices to find a free one
-   v = nextVoice;
-   do {
-      // break out of the loop if this voice is free
-      if ( voices[ v ].status == VOICE_FREE ) break;
-      // increment the voice index, wrapping if necessary
-      v++;
-      if ( v >= NUM_VOICES ) v -= NUM_VOICES;
-   } while ( 1 );
-   
-   // check if the voice has the same patch as the new note
-   if ( voices[ v ].patch != p ) {
-      // set the base index for operator pairs (voice * 2)
-      i = v << 1;
-      
-      // patch doesn't match, patch needs to be loaded into this voice
-      // get the register offset for operator 1 (Modulator) and write its regs
-      regOff = opRegOffset[ chOpPairs[ i ] ];
-      writeReg( 0x20 + regOff, patches[ p ].Op1FMult );
-      writeReg( 0x40 + regOff, patches[ p ].Op1KSAtt );
-      writeReg( 0x60 + regOff, patches[ p ].Op1AD );
-      writeReg( 0x80 + regOff, patches[ p ].Op1SR );
-      writeReg( 0xE0 + regOff, patches[ p ].Op1WF );
-      
-      // get the register offset for operator 2 (Carrier) and write its regs
-      regOff = opRegOffset[ chOpPairs[ i + 1 ] ];
-      writeReg( 0x20 + regOff, patches[ p ].Op2FMult );
-      // carrier's Attenuation register will be written later
-      writeReg( 0x60 + regOff, patches[ p ].Op2AD );
-      writeReg( 0x80 + regOff, patches[ p ].Op2SR );
-      writeReg( 0xE0 + regOff, patches[ p ].Op2WF );
-   
-      // set the voice's patch index
-      voices[ v ].patch = p;
-      // clear the voice's fMultChanged bit
-      voices[ v ].fMultChanged = 0;
+   // if we've reached the maximum number of used voices, then we need
+   // to decide what to do based on the current behavior model
+   if ( numVoicesUsed == NUM_VOICES ) {
+      // branch based on behavior
+      switch ( fullVoiceMode ) {
+         case FULL_VOICE_IGNORE:
+            // new notes are ignored
+            return;
+            break;
 
-      // shadow necessary registers
-      voices[ v ].shadowFMult[ 0 ] = patches[ p ].Op1FMult;
-      voices[ v ].shadowFMult[ 1 ] = patches[ p ].Op2FMult;
+         case FULL_VOICE_OLDEST:
+            // find the oldest voice
+            v = 0;
+            for ( i = 0; i < NUM_VOICES; i++ ) {
+               if ( voices[ i ].noteAge > voices[ v ].noteAge ) v = i;
+            }
+            // silence it, and then we'll use it
+            voiceNoteOff( v, 0x40 );
+            break;
+
+         default:
+            // we shouldn't reach this, but we'll ignore the note to be safe
+            return;
+      }
+
+   } else {
+      // there's a free voice somewhere, cycle through the voices to find it
+      v = nextVoice;
+      do {
+         // break out of the loop if this voice is free
+         if ( voices[ v ].status == VOICE_FREE ) break;
+         // increment the voice index, wrapping if necessary
+         v++;
+         if ( v >= NUM_VOICES ) v -= NUM_VOICES;
+      } while ( 1 );
    }
    
-   // update the voice's information
-   voices[ v ].status = VOICE_KEYON;
-   voices[ v ].channel = chan;
-   voices[ v ].noteKey = key;
-   voices[ v ].noteVelocity = velocity;
-   
-   // call the updateVoice function on the voice, updating all
-   updateVoice( v, UPDATE_ALL );
-   
-   // increment the number of used voices
-   numVoicesUsed++;
-   // cycle the next voice index
-   nextVoice = v + 1;
-   if ( nextVoice >= NUM_VOICES ) nextVoice -= NUM_VOICES;
+   // activate the voice
+   voiceNoteOn( v, chan, key, velocity );
 }
 
 // sends an Aftertouch Key command to the driver
@@ -754,8 +812,8 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
                // skip inactive notes
                if ( voices[ i ].status != VOICE_KEYON ) continue;
                if ( voices[ i ].channel == chan ) {
-                  // send the Note-Off
-                  OPL3_NoteOff( chan, voices[ i ].noteKey, 0x40 );
+                  // perform the Note-Off
+                  voiceNoteOff( i, 0x40 );
                }
             }
          }
@@ -780,8 +838,8 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
                // set note's velocity to 0 and force a volume update to kill the sound
                voices[ i ].noteVelocity = 0;
                updateVoice( i, UPDATE_VOLUME );
-               // send a NoteOff
-               OPL3_NoteOff( chan, voices[ i ].noteKey, 0x0 );
+               // perform the Note-Off
+               voiceNoteOff( i, 0x40 );
             }
          }
          break;
@@ -797,8 +855,8 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
             // skip inactive notes
             if ( voices[ i ].status != VOICE_KEYON ) continue;
             if ( voices[ i ].channel == chan ) {
-               // turn off the note
-               OPL3_NoteOff( chan, voices[ i ].noteKey, 0x40 );
+               // perform the Note-Off
+               voiceNoteOff( i, 0x40 );
             }
          }
          break;
@@ -914,8 +972,8 @@ void     OPL3_AllNotesOff () {
    for ( i = 0; i < NUM_VOICES; i++ ) {
       // skip inactive notes
       if ( voices[ i ].status != VOICE_KEYON ) continue;
-      // turn off the note
-      OPL3_NoteOff( voices[ i ].channel, voices[ i ].noteKey, 0x40 );
+      // perform the Note-Off
+      voiceNoteOff( i, 0x40 );
    }
 }
 
@@ -947,4 +1005,16 @@ void     OPL3_ResetChanControllers ( BYTE chan ) {
          updateVoice( i, UPDATE_ALL );
       }
    }
+}
+
+// sets the driver's behavior for note-ons when all voices are in use
+int      OPL3_SetFullVoiceMode( BYTE mode ) {
+   // abort if the driver isn't inited yet
+   if ( !opl3Inited ) return ( OPL3_ERR_NOT_INITED );
+
+   // set the mode
+   fullVoiceMode = mode;
+
+   // return success
+   return ( OPL3_OK );
 }

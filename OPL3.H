@@ -11,6 +11,11 @@
 #define  OPL3_OK                  0    // function executed successfully
 #define  OPL3_ERR_FILE_OPEN       1    // file could not be opened (file not found, etc)
 #define  OPL3_ERR_FILE_BAD        2    // file failed format checks (magicnum, etc)
+#define  OPL3_ERR_NOT_INITED      3    // the OPL3 driver hasn't been initialized yet
+
+// behaviors for dealing with Note-Ons while all voices are in use
+#define  FULL_VOICE_IGNORE 0     // new notes are ignored
+#define  FULL_VOICE_OLDEST 1     // new notes will replace the oldest
 
 /******** OPL3 driver functions ********/
 
@@ -36,6 +41,8 @@ void     OPL3_PitchBend ( BYTE chan, BYTE lsb, BYTE msb );
 void     OPL3_AllNotesOff ();
 // resets a channel's controllers
 void     OPL3_ResetChanControllers ( BYTE chan );
+// sets the driver's behavior for note-ons when all voices are in use
+int      OPL3_SetFullVoiceMode ( BYTE mode );
 
 
 #endif
