@@ -36,7 +36,7 @@ typedef struct MidiTrack {
 
 /******** FUNCTION DECLARATIONS ********/
 // (for functions not declared in the header)
-void __interrupt __far timerHandler ();   // real-mode handler for the PIT interrupt
+void __interrupt __far timerHandler ();   // handler for the PIT interrupt
 void     resetPIT ();            // restores the PIT behavior and interrupt vector to normal
 void     processEvents ();       // processes queued MIDI events
 
@@ -68,10 +68,12 @@ volatile DWORD elapsedTime;      // elapsed playback time, measured in PIT ticks
 
 /******** FUNCTION DEFINITIONS ********/
 
-// real-mode PIT interrupt handler
-// it's short and sweet, and DOES NOT call the event-processing function!
-// this is to ensure that the handler runs in real mode, while the event-processing
-// is all handled in protected mode
+// PIT interrupt handler
+// NOTE: apparently this function resides in protected-mode memory,
+// so it might be possible to call processEvents here anyways, HOWEVER
+// it would be wise to keep this function as short as possible, and set
+// a flag to indicate an update is ready, so it doesn't block any other
+// hardware interrupts from running by going through all the processing code
 void __interrupt __far timerHandler () {
    // set the flag indicating an update is ready
    updateFlag = 1;
