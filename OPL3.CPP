@@ -12,6 +12,9 @@
 #include "globals.h"
 #include "opl3.h"
 
+// use the OPL3 namespace
+namespace OPL3 {
+
 /******** CONSTANTS ********/
 #define  OPL3_ADDR         0x220 // base I/O address of the OPL3
 
@@ -41,88 +44,88 @@
 // Operator 1 = Modulator, 2 = Carrier
 typedef struct PatchDef {
    // data found in patch bank definitions
-   BYTE  Op1FMult;      // Op-1 reg at base 0x20 (Trem, Vib, Sust, KSR, F-Mult)
-   BYTE  Op1KSAtt;      // Op-1 reg at base 0x40 (KSL, Attenuation)
-   BYTE  Op1AD;         // Op-1 reg at base 0x60 (Attack Rate, Decay Rate)
-   BYTE  Op1SR;         // Op-1 reg at base 0x80 (Sustain Level, Release Rate)
-   BYTE  Op1WF;         // Op-1 reg at base 0xE0 (Waveform Select)
-   BYTE  Op2FMult;      // Op-2 reg at base 0x20
-   BYTE  Op2KSAtt;      // Op-2 reg at base 0x40
-   BYTE  Op2AD;         // Op-2 reg at base 0x60
-   BYTE  Op2SR;         // Op-2 reg at base 0x80
-   BYTE  Op2WF;         // Op-2 reg at base 0xE0
-   BYTE  ChFNum;        // Chan reg at base 0xA0 (F-Num low byte)
-   BYTE  ChKBF;         // Chan reg at base 0xB0 (clear Key-On, Block Num, Freq upper bits)
-   BYTE  ChPFb;         // Chan reg at base 0xC0 (Pan, Feedback, Synth)
+   Byte  Op1FMult;      // Op-1 reg at base 0x20 (Trem, Vib, Sust, KSR, F-Mult)
+   Byte  Op1KSAtt;      // Op-1 reg at base 0x40 (KSL, Attenuation)
+   Byte  Op1AD;         // Op-1 reg at base 0x60 (Attack Rate, Decay Rate)
+   Byte  Op1SR;         // Op-1 reg at base 0x80 (Sustain Level, Release Rate)
+   Byte  Op1WF;         // Op-1 reg at base 0xE0 (Waveform Select)
+   Byte  Op2FMult;      // Op-2 reg at base 0x20
+   Byte  Op2KSAtt;      // Op-2 reg at base 0x40
+   Byte  Op2AD;         // Op-2 reg at base 0x60
+   Byte  Op2SR;         // Op-2 reg at base 0x80
+   Byte  Op2WF;         // Op-2 reg at base 0xE0
+   Byte  ChFNum;        // Chan reg at base 0xA0 (F-Num low byte)
+   Byte  ChKBF;         // Chan reg at base 0xB0 (clear Key-On, Block Num, Freq upper bits)
+   Byte  ChPFb;         // Chan reg at base 0xC0 (Pan, Feedback, Synth)
    // additional data
-   BYTE  used;          // whether the patch is used (non-zero for true; unused patches will be ignored when Key-Ons occur)
+   Byte  used;          // whether the patch is used (non-zero for true; unused patches will be ignored when Key-Ons occur)
 } PatchDef;
 
 // MIDI Channel information
 typedef struct MidiChannel {
    // Basic Settings
-   BYTE  patch;         // Index of the patch currently assigned to the channel
+   Byte     patch;         // Index of the patch currently assigned to the channel
    // Controller Settings
-   BYTE  volume;        // Channel's volume controller (only MSB is used)
-   BYTE  pan;           // Channel's pan controller (MSB only)
-   BYTE  expression;    // Channel's expression controller (MSB only)
-   BYTE  modulation;    // Channel's modulation controller (MSB only)
-   BYTE  sustainPedal;  // Channel's sustain pedal (0 or 1)
+   Byte     volume;        // Channel's volume controller (only MSB is used)
+   Byte     pan;           // Channel's pan controller (MSB only)
+   Byte     expression;    // Channel's expression controller (MSB only)
+   Byte     modulation;    // Channel's modulation controller (MSB only)
+   Byte     sustainPedal;  // Channel's sustain pedal (0 or 1)
    // Pitch Bend Settings
-   WORD  pitchBend;     // Channel's raw pitch bend value
-   SBYTE pbSemi;        // Channel's calculated pitch bended semi-note transposition (signed)
-   BYTE  pbFrac;        // Channel's calculated pitch bended 1/16 semi-note transposition (unsigned)
+   UInt16   pitchBend;     // Channel's raw pitch bend value
+   SByte    pbSemi;        // Channel's calculated pitch bended semi-note transposition (signed)
+   Byte     pbFrac;        // Channel's calculated pitch bended 1/16 semi-note transposition (unsigned)
    // Registered Parameter Settings
-   BYTE  rpnIndexLsb;      // Channel's currently selected Registered Parameter Number (low byte)
-   BYTE  rpnIndexMsb;      // Channel's currently selected RPN (high byte)
-   BYTE  rpPitchBendSemi;  // Pitch Bend Sensitivity (+/- semitones)
-   BYTE  rpPitchBendCent;  // Pitch Bend Sensitivity (+/- cents) (ignored for now)
+   Byte     rpnIndexLsb;      // Channel's currently selected Registered Parameter Number (low byte)
+   Byte     rpnIndexMsb;      // Channel's currently selected RPN (high byte)
+   Byte     rpPitchBendSemi;  // Pitch Bend Sensitivity (+/- semitones)
+   Byte     rpPitchBendCent;  // Pitch Bend Sensitivity (+/- cents) (ignored for now)
 } MidiChannel;
 
 // OPL3 Voice information
 typedef struct Opl3Voice {
-   BYTE  status : 2;          // voice status bits (free, Key-On)
-   BYTE  fMultChanged : 1;    // flag for if the voice's F-Mults were changed from the patch's default
-   BYTE  channel;             // MIDI channel the voice currently represents
-   BYTE  noteKey;             // MIDI note the voice currently represents
-   BYTE  noteVelocity;        // velocity of the MIDI note
-   BYTE  patch;               // index of the patch currently loaded into the voice
-   WORD  noteAge;             // age of the voice's note (increments for all voices everytime a Note-On occurs)
+   Byte     status : 2;          // voice status bits (free, Key-On)
+   Byte     fMultChanged : 1;    // flag for if the voice's F-Mults were changed from the patch's default
+   Byte     channel;             // MIDI channel the voice currently represents
+   Byte     noteKey;             // MIDI note the voice currently represents
+   Byte     noteVelocity;        // velocity of the MIDI note
+   Byte     patch;               // index of the patch currently loaded into the voice
+   UInt16   noteAge;             // age of the voice's note (increments for all voices everytime a Note-On occurs)
    // register shadows
-   BYTE  shadowKBF;           // shadowed copy of KBF register for quick Key-Off
-   BYTE  shadowFMult[ 2 ];    // shadowed copy of both operators' Trem, Vib, Sust, KSR, F-Mult registers for Modulation controller
+   Byte     shadowKBF;           // shadowed copy of KBF register for quick Key-Off
+   Byte     shadowFMult[ 2 ];    // shadowed copy of both operators' Trem, Vib, Sust, KSR, F-Mult registers for Modulation controller
 } Opl3Voice;
 
 /******** FUNCTION DECLARATIONS ********/
 // (for functions not declared in the header)
 // writes a register to the OPL3
-void     writeReg ( WORD reg, BYTE data );
+void     writeReg ( UInt16 reg, Byte data );
 // sets all the registers to their initial state
 void     initRegs ();
 // updates the note in the specified voice to reflect changes to its frequency or volume
-void     updateVoice ( BYTE v, BYTE flags );
+void     updateVoice ( Byte v, Byte flags );
 // performs a Note-On using the specified voice
-void     voiceNoteOn ( BYTE v, BYTE chan, BYTE key, BYTE velocity );
+void     voiceNoteOn ( Byte v, Byte chan, Byte key, Byte velocity );
 // performs a Note-Off on the specified voice
-void     voiceNoteOff ( BYTE v, BYTE velocity );
+void     voiceNoteOff ( Byte v, Byte velocity );
 
 /******** VARIABLES ********/
 // lookup tables
 // register offsets for the 36 OPL3 operators
-WORD        opRegOffset[ 36 ] = {
+UInt16      opRegOffset[ 36 ] = {
    0x000, 0x001, 0x002, 0x003, 0x004, 0x005, 0x008, 0x009, 0x00A, 0x00B, 0x00C, 0x00D,
    0x010, 0x011, 0x012, 0x013, 0x014, 0x015, 0x100, 0x101, 0x102, 0x103, 0x104, 0x105,
    0x108, 0x109, 0x10A, 0x10B, 0x10C, 0x10D, 0x110, 0x111, 0x112, 0x113, 0x114, 0x115 };
 // register offsets for the 18 OPL3 channels
-WORD        chRegOffset[ 18 ] = {
+UInt16      chRegOffset[ 18 ] = {
    0x000, 0x001, 0x002, 0x003, 0x004, 0x005, 0x006, 0x007, 0x008,
    0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107, 0x108 };
 // channel operator pairs (each 2 entries are the operators used in the channel, first being the moderator, second the carrier)
-BYTE        chOpPairs[ 36 ] = {
+Byte        chOpPairs[ 36 ] = {
     0,  3,  1,  4,  2,  5,  6,  9,  7, 10,  8, 11, 12, 15, 13, 16, 14, 17,
    18, 21, 19, 22, 20, 23, 24, 27, 25, 28, 26, 29, 30, 33, 31, 34, 32, 35 };
 // frequency lookup table (12 semitones, with 16 fractions)
-WORD        freqTable[ 192 ] = {
+UInt16      freqTable[ 192 ] = {
    0x0159, 0x015A, 0x015B, 0x015D, 0x015E, 0x015F, 0x0160, 0x0162,
    0x0163, 0x0164, 0x0166, 0x0167, 0x0168, 0x0169, 0x016B, 0x016C,
    0x016D, 0x016F, 0x0170, 0x0171, 0x0173, 0x0174, 0x0175, 0x0177,
@@ -148,7 +151,7 @@ WORD        freqTable[ 192 ] = {
    0x028B, 0x028D, 0x0290, 0x0292, 0x0295, 0x0297, 0x0299, 0x029C,
    0x029E, 0x02A1, 0x02A3, 0x02A5, 0x02A8, 0x02AA, 0x02AD, 0x02AF };
 // attenuation lookup table
-BYTE     attenTable[ 128 ] = {
+Byte     attenTable[ 128 ] = {
    0x3F, 0x38, 0x30, 0x2B, 0x28, 0x25, 0x23, 0x21, 0x20, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x18,
    0x17, 0x17, 0x16, 0x16, 0x15, 0x14, 0x14, 0x13, 0x13, 0x12, 0x12, 0x11, 0x11, 0x11, 0x10, 0x10,
    0x0F, 0x0F, 0x0F, 0x0E, 0x0E, 0x0E, 0x0D, 0x0D, 0x0D, 0x0D, 0x0C, 0x0C, 0x0C, 0x0C, 0x0B, 0x0B,
@@ -158,7 +161,7 @@ BYTE     attenTable[ 128 ] = {
    0x03, 0x03, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01,
    0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 // semi-tone lookup table
-BYTE     semiToneTable[ 128 ] = {
+Byte     semiToneTable[ 128 ] = {
     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,  0,  1,  2,  3,
     4,  5,  6,  7,  8,  9, 10, 11,  0,  1,  2,  3,  4,  5,  6,  7,
     8,  9, 10, 11,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,
@@ -170,7 +173,7 @@ BYTE     semiToneTable[ 128 ] = {
 // octave lookup table
 // octaves < 0 means right-shift the frequency by abs(octave) and use block num 0
 // octaves > 7 require the two operators F-mult values to be changed reflect a right shift of the excess
-char     octaveTable[ 128 ] = {
+SByte    octaveTable[ 128 ] = {
    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  0,  0,  0,  0,
     0,  0,  0,  0,  0,  0,  0,  0,  1,  1,  1,  1,  1,  1,  1,  1,
     1,  1,  1,  1,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,
@@ -182,11 +185,11 @@ char     octaveTable[ 128 ] = {
 // frequency multiplier doubling lookup table
 // the index put in will spit out the new F-Mult to double the effective freq
 // note that higher F-Mults will not be able to reach the freqs they need
-BYTE     freqMultDouble[ 16 ] = {
+Byte     freqMultDouble[ 16 ] = {
     1,  2,  4,  6,  8, 10, 12, 15,
    15, 15, 15, 15, 15, 15, 15, 15 };
 // initial register status table
-BYTE     initRegsTable[ 512 ] = {
+Byte     initRegsTable[ 512 ] = {
    0x00, 0x20, 0x00, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 0x000
    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 0x010
    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 0x020
@@ -224,15 +227,14 @@ BYTE     initRegsTable[ 512 ] = {
 PatchDef       patches[ 256 ];   // Patch definitions for the 128 melodic and 128 percussion instruments
 MidiChannel    channels[ 16 ];   // Info and current state of the 16 MIDI channels
 Opl3Voice      voices[ NUM_VOICES ];	// Info and current state of the OPL3 channels
-BYTE           nextVoice;        // index of the next voice to try for a Key-On
-BYTE           numVoicesUsed;    // the number of voices currently in use
-BYTE           fullVoiceMode;    // behavior for dealing with Note-Ons while all voices are in use
-BOOL           opl3Inited = FALSE;   // whether the driver has been initialized
+Byte           nextVoice;        // index of the next voice to try for a Key-On
+Byte           numVoicesUsed;    // the number of voices currently in use
+bool           opl3Inited = false;   // whether the driver has been initialized
 
 /******** FUNCTION DEFINITIONS ********/
 
 // writes a register to the OPL3
-void     writeReg ( WORD reg, BYTE data ) {
+void     writeReg ( UInt16 reg, Byte data ) {
    // if the high byte of reg is clear, write to the base
 	if ( reg & 0x100 ) {
       // write to the extended registers
@@ -257,17 +259,17 @@ void     initRegs () {
 // updates a voice to reflect changes to its note frequency, volume, pan, etc.
 //    BYTE     v = the index of the voice to update
 //    BYTE     flags = flags that determine what will be updated (for quicker execution)
-void     updateVoice ( BYTE v, BYTE flags ) {
-   BYTE     i;          // base index into the chOpPairs table for this voice
-   WORD     regOff;     // cached register offset
+void     updateVoice ( Byte v, Byte flags ) {
+   Byte     i;          // base index into the chOpPairs table for this voice
+   UInt16   regOff;     // cached register offset
    
    // set the base index for operator pairs (voice * 2)
    i = v << 1;
    
    // if the volume flag is set
    if ( flags & UPDATE_VOLUME ) {
-      WORD     atten;      // attenuation to use for the note
-      WORD     baseAtten;  // base attenuation to use
+      UInt16   atten;      // attenuation to use for the note
+      UInt16   baseAtten;  // base attenuation to use
 
       // determine the value that should be used for the carrier's attenuation
       // calculate base attenuation (note velocity, channel volume, channel expression)
@@ -296,7 +298,7 @@ void     updateVoice ( BYTE v, BYTE flags ) {
    
    // if the pan flag is set
    if ( flags & UPDATE_PAN ) {
-      BYTE     panMask;    // pan mask to use
+      Byte     panMask;    // pan mask to use
 
       // determine the pan mask to use
       if ( channels[ voices[ v ].channel ].pan <= PAN_THRESHOLD_L ) {
@@ -338,12 +340,12 @@ void     updateVoice ( BYTE v, BYTE flags ) {
    
    // if the frequency flag is set
    if ( flags & UPDATE_FREQ ) {
-      BYTE     regFNum;    // value to write for voice's F-Num low reg
-      BYTE     regKBF;     // value to write for the voice's Key-On, Block Num, Freq hi reg
-      WORD     freq;       // the calculated frequency of the note
+      Byte     regFNum;    // value to write for voice's F-Num low reg
+      Byte     regKBF;     // value to write for the voice's Key-On, Block Num, Freq hi reg
+      UInt16   freq;       // the calculated frequency of the note
       int      semiTone;   // the calculated semi-tone of the note
-      SBYTE    octave;     // the calculated octave of the note
-      BYTE     fMult[ 2 ];   // new F-Mult values (if they need to change)
+      SByte    octave;     // the calculated octave of the note
+      Byte     fMult[ 2 ];   // new F-Mult values (if they need to change)
 
       // determine the values to write for the channel's frequency and block bytes
       if ( voices[ v ].channel == 9 ) {
@@ -426,10 +428,10 @@ void     updateVoice ( BYTE v, BYTE flags ) {
 }
 
 // Performs a Note-On using the specified voice
-void     voiceNoteOn ( BYTE v, BYTE chan, BYTE key, BYTE velocity ) {
-   BYTE     p;          // index of the patch the new note needs to use
-   BYTE     i;          // base index into the chOpPairs table for this voice / loop iterator
-   WORD     regOff;     // cached register offset
+void     voiceNoteOn ( Byte v, Byte chan, Byte key, Byte velocity ) {
+   Byte     p;          // index of the patch the new note needs to use
+   Byte     i;          // base index into the chOpPairs table for this voice / loop iterator
+   UInt16   regOff;     // cached register offset
 
    // determine what patch the voice should use
    // channel 9 (percussion) uses the new note's key with percussion bit set
@@ -498,7 +500,7 @@ void     voiceNoteOn ( BYTE v, BYTE chan, BYTE key, BYTE velocity ) {
 }
 
 // Performs a Note-Off on the specified voice
-void     voiceNoteOff ( BYTE v, BYTE velocity ) {
+void     voiceNoteOff ( Byte v, Byte velocity ) {
    // set the voice's status to free
    voices[ v ].status = VOICE_FREE;
    // decrement the number of used voices
@@ -509,7 +511,7 @@ void     voiceNoteOff ( BYTE v, BYTE velocity ) {
 
 // Initializes the OPL3 driver (must be called before any other functions)
 // Returns an error code on failure
-int      OPL3_Init () {
+STATUS   Init () {
    int      i;    // for-loop iterator
    
    // initialize the OPL3 driver by resetting the registers
@@ -553,38 +555,36 @@ int      OPL3_Init () {
    nextVoice = 0;
    // set the number of used voices to 0
    numVoicesUsed = 0;
-   // set the default full voice behavior
-   fullVoiceMode = FULL_VOICE_IGNORE;
 
-   opl3Inited = TRUE;
+   opl3Inited = true;
    
    // return success
-   return ( OPL3_OK );
+   return ( OK );
 }
 
 // Loads an OPL3 patch bank from a file
 //    char *   fileName       Name and optional path to the file to be loaded
 //    BOOL     overlay        Whether the patch is loaded as a base (false) or over a previous load (true)
 // Returns an error code on failure
-int      OPL3_LoadPatchBank ( char * fileName, BOOL overlay ) {
+STATUS   LoadPatchBank ( char * fileName, bool overlay ) {
    FILE *   hFile;         // handle for the bank file
    char     magicNum[4];   // scratchpad for magic num
-   BYTE     patchIndex;    // patch index
-   WORD     numPatches;    // number of patches to load
-   WORD     i;             // for-loop iterator
+   Byte     patchIndex;    // patch index
+   UInt16   numPatches;    // number of patches to load
+   UInt16   i;             // for-loop iterator
 
    // abort if the driver isn't inited yet
-   if ( !opl3Inited ) return ( OPL3_ERR_NOT_INITED );
+   if ( !opl3Inited ) return ( ERR_NOT_INITED );
    
    // open the patch bank
    hFile = fopen( fileName, "rb" );
    
    // if null there was an error
-   if ( hFile == NULL ) return ( OPL3_ERR_FILE_OPEN );
+   if ( hFile == NULL ) return ( ERR_FILE_OPEN );
    
    // check the magic num
    fread( magicNum, 4, 1, hFile );
-   if ( strncmp( magicNum, "OBNK", 4 ) != 0 ) return ( OPL3_ERR_FILE_BAD );
+   if ( strncmp( magicNum, "OBNK", 4 ) != 0 ) return ( ERR_FILE_BAD );
    
    // read the number of patches
    fread( &numPatches, sizeof( numPatches ), 1, hFile );
@@ -611,13 +611,13 @@ int      OPL3_LoadPatchBank ( char * fileName, BOOL overlay ) {
    fclose( hFile );
    
    // return success
-   return ( OPL3_OK );
+   return ( OK );
 }
 
 // sends a Note-Off command to the driver
-void     OPL3_NoteOff ( BYTE chan, BYTE key, BYTE velocity ) {
-   BYTE     v;          // index of the voice we're checking/using
-   BYTE     i;          // for-loop iterator
+void     NoteOff ( Byte chan, Byte key, Byte velocity ) {
+   Byte     v;          // index of the voice we're checking/using
+   Byte     i;          // for-loop iterator
    
    // if there are no active voices, for whatever reason, just return
    if ( numVoicesUsed == 0 ) return;
@@ -647,41 +647,28 @@ void     OPL3_NoteOff ( BYTE chan, BYTE key, BYTE velocity ) {
 }
 
 // sends a Note-On command to the driver
-void     OPL3_NoteOn ( BYTE chan, BYTE key, BYTE velocity ) {
-   BYTE     v;          // index of the voice we're checking/using
+void     NoteOn ( Byte chan, Byte key, Byte velocity ) {
+   Byte     v;          // index of the voice we're checking/using
    int      i;          // for-loop iterator
    
    // if the velocity is 0, then treat it as a Note-Off with a velocity of 0x40
    if ( velocity == 0 ) {
-      OPL3_NoteOff( chan, key, 0x40 );
+      NoteOff( chan, key, 0x40 );
       return;
    }
    
    // if we've reached the maximum number of used voices, then we need
    // to decide what to do based on the current behavior model
+   // ACTUALLY NO, we'll always delete the oldest voice because ignoring new notes is dumb
    if ( numVoicesUsed == NUM_VOICES ) {
-      // branch based on behavior
-      switch ( fullVoiceMode ) {
-         case FULL_VOICE_IGNORE:
-            // new notes are ignored
-            return;
-            break;
-
-         case FULL_VOICE_OLDEST:
-            // find the oldest voice
-            v = 0;
-            for ( i = 0; i < NUM_VOICES; i++ ) {
-               if ( voices[ i ].noteAge > voices[ v ].noteAge ) v = i;
-            }
-            // silence it, and then we'll use it
-            voiceNoteOff( v, 0x40 );
-            break;
-
-         default:
-            // we shouldn't reach this, but we'll ignore the note to be safe
-            return;
+      // find the oldest voice
+      v = 0;
+      for ( i = 0; i < NUM_VOICES; i++ ) {
+         if ( voices[ i ].noteAge > voices[ v ].noteAge ) v = i;
       }
-
+      // silence it, and then we'll use it
+      voiceNoteOff( v, 0x40 );
+      
    } else {
       // there's a free voice somewhere, cycle through the voices to find it
       v = nextVoice;
@@ -699,18 +686,18 @@ void     OPL3_NoteOn ( BYTE chan, BYTE key, BYTE velocity ) {
 }
 
 // sends an Aftertouch Key command to the driver
-void     OPL3_AftertouchKey ( BYTE chan, BYTE key, BYTE pressure ) {
+void     AftertouchKey ( Byte chan, Byte key, Byte pressure ) {
    // because I don't know what these events actually do and these are fairly rare they are ignored
 }
 
 // sends an Aftertouch Channel command to the driver
-void     OPL3_AftertouchChan ( BYTE chan, BYTE pressure ) {
+void     AftertouchChan ( Byte chan, Byte pressure ) {
    // because I don't know what these events actually do and these are fairly rare they are ignored
 }
 
 // sends a Controller Change command to the driver
-void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
-   BYTE     i;       // for-loop iterator
+void     ControllerChange ( Byte chan, Byte number, Byte value ) {
+   Byte     i;       // for-loop iterator
    
    // branch based on which controller was changed
    switch ( number ) {
@@ -846,7 +833,7 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
       
       case 0x79:  // Channel Mode - Reset All Controllers
          // reset all the controllers on this channel
-         OPL3_ResetChanControllers( chan );
+         ResetChanControllers( chan );
          break;
       
       case 0x7B:  // Channel Mode - All Notes Off
@@ -929,14 +916,14 @@ void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value ) {
 }
 
 // sends a Program Change command to the driver
-void     OPL3_ProgramChange ( BYTE chan, BYTE program ) {
+void     ProgramChange ( Byte chan, Byte program ) {
    // set the channel's patch
    channels[ chan ].patch = program;
 }
 
 // sends a Pitch Bend command to the driver
-void     OPL3_PitchBend ( BYTE chan, BYTE lsb, BYTE msb ) {
-   WORD     i;             // for-loop iterator
+void     PitchBend ( Byte chan, Byte lsb, Byte msb ) {
+   UInt16   i;             // for-loop iterator
    int      pitchBend;     // pitch bend used in calcs
    
    // load the raw pitch-bend value into the channel
@@ -966,8 +953,8 @@ void     OPL3_PitchBend ( BYTE chan, BYTE lsb, BYTE msb ) {
 }
 
 // turns off all notes
-void     OPL3_AllNotesOff () {
-   WORD     i;    // for-loop iterator
+void     AllNotesOff () {
+   UInt16   i;    // for-loop iterator
    
    for ( i = 0; i < NUM_VOICES; i++ ) {
       // skip inactive notes
@@ -978,8 +965,8 @@ void     OPL3_AllNotesOff () {
 }
 
 // resets a channel's controllers
-void     OPL3_ResetChanControllers ( BYTE chan ) {
-   BYTE     i;    // for-loop iterator
+void     ResetChanControllers ( Byte chan ) {
+   Byte     i;    // for-loop iterator
    
    // reset controller settings to their defaults
    channels[ chan ].volume = 100;
@@ -1007,14 +994,4 @@ void     OPL3_ResetChanControllers ( BYTE chan ) {
    }
 }
 
-// sets the driver's behavior for note-ons when all voices are in use
-int      OPL3_SetFullVoiceMode( BYTE mode ) {
-   // abort if the driver isn't inited yet
-   if ( !opl3Inited ) return ( OPL3_ERR_NOT_INITED );
-
-   // set the mode
-   fullVoiceMode = mode;
-
-   // return success
-   return ( OPL3_OK );
-}
+};    // end OPL3 namespace

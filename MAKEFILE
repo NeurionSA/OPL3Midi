@@ -10,8 +10,8 @@ CFLAGS = /zp1 /q /we
 LDFLAGS = /l=dos4g /q
 
 PROG = playmidi.exe
-HDRS = midi.h globals.h opl3.h
-SRCS = main.cpp midi.cpp opl3.cpp
+HDRS = midi.h globals.h opl3.h timer.h visual.h dpmi.h svga.h
+SRCS = main.cpp midi.cpp opl3.cpp timer.cpp visual.cpp dpmi.cpp svga.cpp
 
 OBJS = $(SRCS:.cpp=.obj)
 
@@ -24,13 +24,23 @@ $(PROG) : $(OBJS)
 
 # dependencies
 
-main.obj : main.cpp midi.h globals.h opl3.h
+main.obj : main.cpp midi.h globals.h opl3.h timer.h visual.h
 
-midi.obj : midi.cpp midi.h globals.h opl3.h
+midi.obj : midi.cpp midi.h globals.h opl3.h timer.h visual.h
 
 opl3.obj : opl3.cpp opl3.h globals.h
 
+timer.obj : timer.cpp timer.h globals.h
+
+visual.obj : visual.cpp visual.h globals.h timer.h svga.h
+
+dpmi.obj : dpmi.cpp dpmi.h globals.h
+
+svga.obj : svga.cpp svga.h dpmi.h globals.h
+
 # cleanup command (MAKE clean)
 clean : .SYMBOLIC
-  del *.obj
-  del *.err
+  @if exist *.obj del *.obj
+  @if exist *.err del *.err
+  @if exist $(PROG) del $(PROG)
+  @echo Build cleaned.

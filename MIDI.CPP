@@ -14,6 +14,11 @@
 #include "globals.h"
 #include "midi.h"
 #include "opl3.h"
+#include "timer.h"
+#include "visual.h"
+
+// use the MIDI namespace
+namespace MIDI {
 
 /******** CONSTANTS ********/
 #define  MAX_TRACKS        32          // max number of tracks player supports
@@ -22,101 +27,54 @@
 #define  MAX_STOP_TIME     1800        // maximum time that can be specified for MIDI stop (30 minutes)
 
 /******** MACROS ********/
-#define  CUR_OFFSET        tracks[curTrack].curOffset
+#define  CUR_OFFSET        tracks[ curTrack ].curOffset
 
 /******** STRUCTS ********/
 typedef struct MidiTrack {
-   DWORD    length;           // length of the track's data in bytes
-   DWORD    startOffset;      // offset in the file of the start of the track's MIDI messages (after the header)
-   DWORD    curOffset;        // offset in the file to the track's next event
-   DWORD    timeToNextEvent;  // delta-time units until the next MIDI event occurs for this track
-   BYTE     status;           // whether the track is playing (non-zero means it is)
-   BYTE     lastMidiEvent;    // stores the last MIDI event byte, for use in Running Status
+   UInt32   length;           // length of the track's data in bytes
+   UInt32   startOffset;      // offset in the file of the start of the track's MIDI messages (after the header)
+   UInt32   curOffset;        // offset in the file to the track's next event
+   UInt32   timeToNextEvent;  // delta-time units until the next MIDI event occurs for this track
+   Byte     status;           // whether the track is playing (non-zero means it is)
+   Byte     lastMidiEvent;    // stores the last MIDI event byte, for use in Running Status
 } MidiTrack;
 
 /******** FUNCTION DECLARATIONS ********/
 // (for functions not declared in the header)
-void __interrupt __far timerHandler ();   // handler for the PIT interrupt
-void     resetPIT ();            // restores the PIT behavior and interrupt vector to normal
 void     processEvents ();       // processes queued MIDI events
 
 /******** VARIABLES ********/
-void ( __interrupt __far *biosTimerHandler )();  // function pointer for the BIOS PIT interrupt handler
-volatile DWORD    clockTicks;    // counter of elapsed clock ticks for chaining to the original PIT interrupt
-DWORD       timerReload;         // the value reloaded into the timer on each tick
+bool        inited = false;      // whether the player has been initialized
+Byte *      midiData = NULL;     // pointer to MIDI file data loaded into memory
+UInt32      fileOffset;          // offset into the file for operations
+bool        fileLoaded = false;  // whether a file is currently loaded in memory
+bool        filePlaying = false; // whether a file is currently playing
 
-BOOL        inited = FALSE;      // whether the player has been initialized
-BYTE *      midiData = NULL;     // pointer to MIDI file data loaded into memory
-DWORD       fileOffset;          // offset into the file for operations
-BOOL        fileLoaded = FALSE;  // whether a file is currently loaded in memory
-BOOL        filePlaying = FALSE; // whether a file is currently playing
-
-DWORD       deltaTime;     // scratchpad for delta-time values (reading and manipulating)
-DWORD       headerLength;  // length of the MIDI file header
-WORD        numTracks;     // number of MIDI tracks in the file
-WORD        midiFormat;    // format of the MIDI file
-WORD        division;      // timing division (d-time units per quarter note)
+UInt32      deltaTime;     // scratchpad for delta-time values (reading and manipulating)
+UInt32      headerLength;  // length of the MIDI file header
+UInt16      numTracks;     // number of MIDI tracks in the file
+UInt16      midiFormat;    // format of the MIDI file
+UInt16      division;      // timing division (d-time units per quarter note)
 MidiTrack   tracks[ MAX_TRACKS ];	// Midi Track data for playback
-BYTE        curTrack;      // current track being handled
-WORD        tracksDone;    // the number of tracks that have finished processing
-DWORD       usPerQNote;    // the current tempo setting (microseconds per quarter note)
-DWORD       deltaNext;     // d-time ticks until the next MIDI event fires
-volatile DWORD deltaCounter;  // the counter for elapsed d-ticks
-volatile BYTE updateFlag;    // flag is set when a timer tick has been received
-DWORD       endPlayTime;         // time when the MIDI should automatically stop playing, measured in PIT ticks (1,193,182 per second)
-volatile DWORD elapsedTime;      // elapsed playback time, measured in PIT ticks (1,193,182 per second)
+Byte        curTrack;      // current track being handled
+UInt16      tracksDone;    // the number of tracks that have finished processing
+UInt32      usPerQNote;    // the current tempo setting (microseconds per quarter note)
+UInt32      deltaNext;     // d-time ticks until the next MIDI event fires
+volatile UInt32 deltaCounter;  // the counter for elapsed d-ticks
+UInt32      timerReload;   // the value reloaded into the timer on each tick (tracked for elapsed time)
+UInt32      endPlayTime;   // time when the MIDI should automatically stop playing, measured in PIT ticks (1,193,182 per second)
+UInt32      elapsedTime;   // elapsed playback time, measured in PIT ticks (1,193,182 per second)
+UInt16      hTimer;        // handle of the timer we allocate
+bool        visualizer;    // whether to send events to the visualizer, too
 
 /******** FUNCTION DEFINITIONS ********/
-
-// PIT interrupt handler
-// NOTE: apparently this function resides in protected-mode memory,
-// so it might be possible to call processEvents here anyways, HOWEVER
-// it would be wise to keep this function as short as possible, and set
-// a flag to indicate an update is ready, so it doesn't block any other
-// hardware interrupts from running by going through all the processing code
-void __interrupt __far timerHandler () {
-   // set the flag indicating an update is ready
-   updateFlag = 1;
-   // increment the delta counter
-   deltaCounter++;
-   // increment the elapsed time counter by the value we loaded into the timer
-   elapsedTime += timerReload;
-   
-   // increment the tick counter by the value we loaded into the timer
-   clockTicks += timerReload;
-   // should we also call the BIOS handler?
-   if ( clockTicks >= 0x10000 ) {
-      // decrement the value
-      clockTicks -= 0x10000;
-      
-      // call the BIOS handler
-      _chain_intr( biosTimerHandler );
-   } else {
-      // we didn't call the BIOS handler so acknowledge the interrupt
-      outp( 0x20, 0x20 );
-   }
-}
-
-// restores the PIT behavior and interrupt vector to normal
-void     resetPIT () {
-   // disable interrupts while we reprogram the PIT
-   _disable();
-   // set the reload value to default
-   outp( 0x43, 0x34 );
-   outp( 0x40, 0x00 );
-   outp( 0x40, 0x00 );
-   // restore the BIOS vector
-   _dos_setvect( 0x08, biosTimerHandler );
-   // re-enable interrupts
-   _enable();
-}
 
 // processes queued MIDI events
 void     processEvents () {
    int      i;          // for-loop iterator
-   BYTE     eventType;  // event's type
-   BYTE     subType;    // event's sub-type (for Meta events)
-   BYTE     b;          // byte scratchpad
+   Byte     eventType;  // event's type
+   Byte     subType;    // event's sub-type (for Meta events)
+   Byte     b;          // byte scratchpad
    
    // perform as many events as possible given the current d-time
    do {
@@ -152,49 +110,63 @@ void     processEvents () {
       switch ( eventType & 0xF0 ) {
          case 0x80:  // Note-Off
             // send the Note-Off command to the driver
-            OPL3_NoteOff( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            OPL3::NoteOff( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::NoteOff( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
             // shift the offset past the event
             CUR_OFFSET += 2;
             break;
             
          case 0x90:  // Note-On
             // send the Note-On command to the driver
-            OPL3_NoteOn( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            OPL3::NoteOn( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::NoteOn( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
             // shift the offset past the event
             CUR_OFFSET += 2;
             break;
             
          case 0xA0:  // Polyphonic Key Pressure
             // send the command to the driver
-            OPL3_AftertouchKey( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            OPL3::AftertouchKey( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::AftertouchKey( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
             // shift the offset past the event
             CUR_OFFSET += 2;
             break;
             
          case 0xB0:  // Controller Change
             // send the Controller Change command to the driver
-            OPL3_ControllerChange( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            OPL3::ControllerChange( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::ControllerChange( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
             // shift the offset past the event
             CUR_OFFSET += 2;
             break;
             
          case 0xC0:  // Program Change
             // send the Program Change command to the driver
-            OPL3_ProgramChange( eventType & 0x0F, midiData[ CUR_OFFSET ] );
+            OPL3::ProgramChange( eventType & 0x0F, midiData[ CUR_OFFSET ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::ProgramChange( eventType & 0x0F, midiData[ CUR_OFFSET ] );
             // shift the offset past the event
             CUR_OFFSET += 1;
             break;
             
          case 0xD0:  // Channel Key Pressure
             // send the command to the driver
-            OPL3_AftertouchChan( eventType & 0x0F, midiData[ CUR_OFFSET ] );
+            OPL3::AftertouchChan( eventType & 0x0F, midiData[ CUR_OFFSET ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::AftertouchChan( eventType & 0x0F, midiData[ CUR_OFFSET ] );
             // shift the offset past the event
             CUR_OFFSET += 1;
             break;
             
          case 0xE0:  // Pitch Bend
             // send the Pitch Bend command to the driver
-            OPL3_PitchBend( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            OPL3::PitchBend( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
+            // send the command to the visualizer, too, if its active
+            if ( visualizer ) Visual::PitchBend( eventType & 0x0F, midiData[ CUR_OFFSET ], midiData[ CUR_OFFSET + 1 ] );
             // shift the offset past the event
             CUR_OFFSET += 2;
             break;
@@ -237,12 +209,8 @@ void     processEvents () {
                         CUR_OFFSET += 3;
                         // calculate the new timer reload value
                         timerReload = ( 596591.0 * usPerQNote ) / ( 500000.0 * division );
-                        // reprogram the PIT with the new reload value
-								_disable();
-                        outp( 0x43, 0x34 );
-                        outp( 0x40, timerReload & 0xFF );   // write lo-byte
-                        outp( 0x40, timerReload >> 8 );     // write hi-byte
-								_enable();
+                        // set the new reload rate for the timer
+                        Timer::SetTimerRate( hTimer, timerReload );
                         break;
                      
                      default:
@@ -287,9 +255,9 @@ void     processEvents () {
       // check if all tracks have finished
       if ( tracksDone >= numTracks ) {
          // playback has stopped
-         filePlaying = FALSE;
-         // restore the PIT
-         resetPIT();
+         filePlaying = false;
+         // stop the timer we were using
+         Timer::StopTimer( hTimer );         
          // break out of the loop
          break;
       }
@@ -310,41 +278,40 @@ void     processEvents () {
 
 // Initializes the player and prepares it for use
 // Returns an error code on failure (or if it's already been called)
-int      MIDI_Init () {
+STATUS   Init () {
+   Timer::STATUS  timerStatus;
    // return if it's already been initialized
-   if ( inited ) return ( MIDI_ERR_GENERIC );
+   if ( inited ) return ( ERR_GENERIC );
    
-   // set default values
-   clockTicks = 0;
-   timerReload = 0x10000;
-   endPlayTime = 0;
-   // save the current DOS interrupt timer handler (vector 0x08)
-   biosTimerHandler = _dos_getvect( 0x08 );
+   timerStatus = Timer::CreateTimer( 0x10000, &hTimer );
+   if ( timerStatus != Timer::OK ) return ( ERR_GENERIC );
    
    // init the OPL3 driver
-   OPL3_Init();
+   OPL3::Init();
+   
+   // default to not using the visualizer
+   visualizer = false;
    
    // init was successful
-   inited = TRUE;
-   updateFlag = 0;
+   inited = true;
    
    // return success
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Loads a MIDI file into the player
 //    char * fileName      Name and optional path to the file to be loaded
 // Returns an error code on failure
 // Cannot be called during playback
-int      MIDI_LoadFile ( char * fileName ) {
+STATUS   LoadFile ( char * fileName ) {
    FILE *   hFile;      // handle of the MIDI file for file operations
-   DWORD    fileSize;   // size of the file
+   UInt32   fileSize;   // size of the file
    int      i;          // for-loop iterator   
    
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    // if the file is currently playing abort
-   if ( filePlaying ) return ( MIDI_ERR_PLAYING );
+   if ( filePlaying ) return ( ERR_PLAYING );
    
    // attempt to open the file for reading
    hFile = fopen( fileName, "rb" );
@@ -352,9 +319,9 @@ int      MIDI_LoadFile ( char * fileName ) {
    // if NULL, we couldn't open it
    if ( hFile == NULL ) {
       // we failed to load the file
-      fileLoaded = FALSE;
+      fileLoaded = false;
       // return an error status
-      return ( MIDI_ERR_FILE_OPEN );
+      return ( ERR_FILE_OPEN );
    }
    
    // we were able to open the file, now check its size
@@ -363,20 +330,20 @@ int      MIDI_LoadFile ( char * fileName ) {
    fseek( hFile, 0, SEEK_SET );
    // if the file is too big or too small, close it and return
    if ( fileSize > MAX_FILE_SIZE || fileSize < 22 ) {
-      fileLoaded = FALSE;
+      fileLoaded = false;
       fclose( hFile );
       // return an error
-      return ( MIDI_ERR_FILE_SIZE );
+      return ( ERR_FILE_SIZE );
    }
    
    // free the allocated memory if necessary and allocate memory
    if ( midiData != NULL ) free( midiData );
-   midiData = (BYTE *) malloc( fileSize );
+   midiData = (Byte *) malloc( fileSize );
    // abort on failure
    if ( midiData == NULL ) {
-      fileLoaded = FALSE;
+      fileLoaded = false;
       fclose( hFile );
-      return ( MIDI_ERR_MALLOC );
+      return ( ERR_MALLOC );
    }
    
    // load the file into memory
@@ -388,8 +355,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    fileOffset = 0;
    if ( strncmp( (char *)&midiData[ 0 ], "MThd", 4 ) != 0 ) {
       // magic-num failure
-      fileLoaded = FALSE;
-      return ( MIDI_ERR_FILE_BAD );
+      fileLoaded = false;
+      return ( ERR_FILE_BAD );
    }
    fileOffset += 4;
    
@@ -401,8 +368,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    fileOffset += 4;
    // if the header length is < 6 then abort
    if ( headerLength < 6 ) {
-      fileLoaded = FALSE;
-      return ( MIDI_ERR_FILE_BAD );
+      fileLoaded = false;
+      return ( ERR_FILE_BAD );
    }
    
    // read the format (MSB)
@@ -410,8 +377,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    fileOffset += 2;
    // abort on unsupported formats (anything other than 0 or 1)
    if ( midiFormat > 1 ) {
-      fileLoaded = FALSE;
-      return ( MIDI_ERR_FILE_FORMAT );
+      fileLoaded = false;
+      return ( ERR_FILE_FORMAT );
    }
    
    // read the number of tracks (MSB)
@@ -419,8 +386,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    fileOffset += 2;
    // abort if the number of tracks is more than the player supports, or 0
    if ( ( numTracks > MAX_TRACKS ) || ( numTracks == 0 ) ) {
-      fileLoaded = FALSE;
-      return ( MIDI_ERR_FILE_TRACKS );
+      fileLoaded = false;
+      return ( ERR_FILE_TRACKS );
    }
    
    // read the time division (MSB)
@@ -428,8 +395,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    fileOffset += 2;
    // abort if the division is in SMTPE format
    if ( division & 0x8000 ) {
-      fileLoaded = FALSE;
-      return ( MIDI_ERR_FILE_TIMING );
+      fileLoaded = false;
+      return ( ERR_FILE_TIMING );
    }
    
    // skip past any unknown header bytes
@@ -448,8 +415,8 @@ int      MIDI_LoadFile ( char * fileName ) {
    for ( i = 0; i < numTracks; i++ ) {
       // read the track's magic num and abort if it's bad
       if ( strncmp( (char *)&midiData[ fileOffset ], "MTrk", 4 ) != 0 ) {
-         fileLoaded = FALSE;
-         return ( MIDI_ERR_FILE_BAD );
+         fileLoaded = false;
+         return ( ERR_FILE_BAD );
       }
       fileOffset += 4;
       
@@ -469,30 +436,33 @@ int      MIDI_LoadFile ( char * fileName ) {
    }
    
    // load was successful
-   fileLoaded = TRUE;
+   fileLoaded = true;
+   
    // reset the end play time to 0 (ignored)
    endPlayTime = 0;
+   // tell the visualizer the name of the file, even if we aren't using it
+   Visual::SetFileName( fileName );
    
    // rewind the MIDI to prepare it for play
-   MIDI_Rewind();
+   Rewind();
    
    // return success
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Rewinds a loaded MIDI to the beginning and restores the player's state to default
 // Returns an error code on failure
 // Cannot be called during playback
-int      MIDI_Rewind () {
+STATUS   Rewind () {
    int      i;          // for-loop iterator
-   BYTE     b;          // byte scratchpad
+   Byte     b;          // byte scratchpad
    
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    // if the file is currently playing abort
-   if ( filePlaying ) return ( MIDI_ERR_PLAYING );
+   if ( filePlaying ) return ( ERR_PLAYING );
    // if no file has been loaded then abort
-   if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
+   if ( !fileLoaded ) return ( ERR_NOT_LOADED );
    
    // set the tempo to the default
    usPerQNote = 500000;
@@ -500,10 +470,10 @@ int      MIDI_Rewind () {
    tracksDone = 0;
    // calculate the value to reload the PIT with
    timerReload = ( 596591.0 * usPerQNote ) / ( 500000.0 * division );
+   Timer::SetTimerRate( hTimer, timerReload );
    // reset the elapsed time
    elapsedTime = 0;
-   // clear the update request flag
-   updateFlag = 0;
+   
    // iterate through the tracks and reset them
    for ( i = 0; i < numTracks; i++ ) {
       // reset the track's current offset
@@ -539,138 +509,141 @@ int      MIDI_Rewind () {
    
    // reset all OPL3 channel controllers
    for ( i = 0; i < 16; i++ ) {
-      OPL3_ResetChanControllers( i );
+      OPL3::ResetChanControllers( i );
    }
    
    // return success
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Begins playback of the loaded MIDI (unpausing if it was paused)
 // Returns an error code on failure
 // Cannot be called during playback
-int      MIDI_Play () {
+STATUS   Play () {
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    // if the file is currently playing abort
-   if ( filePlaying ) return ( MIDI_ERR_PLAYING );
+   if ( filePlaying ) return ( ERR_PLAYING );
    // if no file has been loaded then abort
-   if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
+   if ( !fileLoaded ) return ( ERR_NOT_LOADED );
    
    // file is now playing
-   filePlaying = TRUE;
+   filePlaying = true;
    
-   // set the interrupt vector and load the PIT with the reload value
-   _disable();
-   _dos_setvect( 0x08, timerHandler );
-   outp( 0x43, 0x34 );
-   outp( 0x40, timerReload & 0xFF );   // write lo-byte
-   outp( 0x40, timerReload >> 8 );     // write hi-byte
-   _enable();
+   // Start the timer
+   Timer::StartTimer( hTimer );
    
    // return an OK status
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Stops playback of the loaded MIDI and rewinds to the beginning
 // Returns an error code on failure
-int      MIDI_Stop () {
+STATUS   Stop () {
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    // if no file has been loaded then abort
-   if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
+   if ( !fileLoaded ) return ( ERR_NOT_LOADED );
    // if file is not playing then abort
-   if ( !filePlaying ) return ( MIDI_ERR_NOT_PLAYING );
+   if ( !filePlaying ) return ( ERR_NOT_PLAYING );
    
-   // restore the PIT
-   resetPIT();
+   // stop the timer
+   Timer::StopTimer( hTimer );
    
    // stop playback of all notes
-   OPL3_AllNotesOff();
+   OPL3::AllNotesOff();
    
    // file is not playing
-   filePlaying = FALSE;
+   filePlaying = false;
    // rewind
-   MIDI_Rewind();
+   Rewind();
    
    // return an OK status
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Pauses playback of the loaded MIDI
 // Returns an error code on failure
-int      MIDI_Pause () {
+STATUS   Pause () {
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    // if no file has been loaded then abort
-   if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
+   if ( !fileLoaded ) return ( ERR_NOT_LOADED );
    // if file is not playing then abort
-   if ( !filePlaying ) return ( MIDI_ERR_NOT_PLAYING );
+   if ( !filePlaying ) return ( ERR_NOT_PLAYING );
    
-   // restore the PIT
-   resetPIT();
+   // stop the timer
+   Timer::StopTimer( hTimer );
    
    // stop playback of all notes
-   OPL3_AllNotesOff();
+   OPL3::AllNotesOff();
    
    // file is not playing
-   filePlaying = FALSE;
+   filePlaying = false;
    
    // return an OK status
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Shuts down the player and does cleanup (i.e. restoring PIT behavior)
 // Returns an error code on failure
-int      MIDI_ShutDown () {
+STATUS   ShutDown () {
    
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    
-   // restore the PIT
-   resetPIT();
+   // stop the timer and free it
+   Timer::StopTimer( hTimer );
+   Timer::FreeTimer( hTimer );
    
    // shut down/reset OPL3 driver by calling init on it
-   OPL3_Init();
+   OPL3::Init();
    
    // we're uninited now
-   inited = FALSE;
+   inited = false;
    
    // return success
-   return ( MIDI_OK );
+   return ( OK );
 }
 
 // Returns if the player is currently playing
-BOOL     MIDI_IsPlaying () {
+bool    IsPlaying () {
    return ( filePlaying );
 }
 
 // This function should be called periodically (ideally many times a frame) to service
 // the MIDI driver and handle new event ticks
-void     MIDI_Update () {
-   // check if the update flag was set, and then proceed with other checks
-   if ( updateFlag ) {
-      // clear the flag
-      updateFlag = 0;
+STATUS   Update () {
+   UInt32   timerTicks = 0;
+   
+   // return an error if the file isn't playing
+   if ( !filePlaying ) return ( ERR_NOT_PLAYING );
+   
+   // get the number of ticks that have elapsed for the timer
+   Timer::GetTimerTicks( hTimer, &timerTicks );
+   
+   // proceed only if new delta ticks have occured
+   if ( timerTicks ) {
+      // increment the elapsed time
+      elapsedTime += timerReload * timerTicks;
+      // if the elapsed time has met/exceeded the end-time, then stop and return
+      if ( ( endPlayTime > 0 ) && ( elapsedTime >= endPlayTime ) ) {
+         Stop();
+         // return success
+         return ( OK );
+      }
+      // increment the deltaCounter
+      deltaCounter += timerTicks;
       
       // check if enough d-ticks have passed
       if ( deltaCounter >= deltaNext ) {
          // process MIDI events
          processEvents();
       }
-      
-      // if a play time limit was set, check if we've reached it
-      if ( endPlayTime ) {
-         if ( elapsedTime >= endPlayTime ) {
-            // we have, so restore the PIT
-            resetPIT();
-            // turn off all notes
-            OPL3_AllNotesOff();
-            // and clear the filePlaying flag
-            filePlaying = FALSE;
-         }
-      }
    }
+   
+   // return success
+   return ( OK );
 }
 
 // Sets the time, in seconds, at which the MIDI should be prematurely stopped
@@ -678,21 +651,35 @@ void     MIDI_Update () {
 // Note that accuracy of the stop time is dependent on MIDI_Update being called frequently,
 // because the check for stopping is made there
 // Returns an error code on failure
-int      MIDI_SetPlayTime ( WORD seconds ) {
+STATUS   SetPlayTime ( UInt16 seconds ) {
 
    // if the player hasn't been Inited yet abort
-   if ( !inited ) return ( MIDI_ERR_NOT_INITED );
+   if ( !inited ) return ( ERR_NOT_INITED );
    // if the file is currently playing abort
-   if ( filePlaying ) return ( MIDI_ERR_PLAYING );
+   if ( filePlaying ) return ( ERR_PLAYING );
    // if no file has been loaded then abort
-   if ( !fileLoaded ) return ( MIDI_ERR_NOT_LOADED );
-
+   if ( !fileLoaded ) return ( ERR_NOT_LOADED );
+   
    // return an error if the provided value was too high
-   if ( seconds > MAX_STOP_TIME ) return ( MIDI_ERR_BAD_ARGUMENT );
+   if ( seconds > MAX_STOP_TIME ) return ( ERR_BAD_ARGUMENT );
 
    // set the variable (measured in PIT clock ticks)
    endPlayTime = seconds * 1193182;
 
    // return success
-   return ( MIDI_OK );
+   return ( OK );
 }
+
+STATUS   EnableVisualizer () {
+      // if the player hasn't been Inited yet abort
+   if ( !inited ) return ( ERR_NOT_INITED );
+   // if no file has been loaded then abort
+   if ( !fileLoaded ) return ( ERR_NOT_LOADED );
+   
+   visualizer = true;
+   
+   // return success
+   return ( OK );
+}
+
+};    // end MIDI namespace

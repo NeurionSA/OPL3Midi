@@ -2,47 +2,47 @@
 //
 // OPL3 Driver include
 
-#if !defined( _OPL3_H )
-#define __OPL3_H
+#if !defined( OPL3_H )
+#define OPL3_H
 
 #include "globals.h"    // for type defs
 
-/******** MIDI player status messages ********/
-#define  OPL3_OK                  0    // function executed successfully
-#define  OPL3_ERR_FILE_OPEN       1    // file could not be opened (file not found, etc)
-#define  OPL3_ERR_FILE_BAD        2    // file failed format checks (magicnum, etc)
-#define  OPL3_ERR_NOT_INITED      3    // the OPL3 driver hasn't been initialized yet
+// use the OPL3 namespace
+namespace OPL3 {
 
-// behaviors for dealing with Note-Ons while all voices are in use
-#define  FULL_VOICE_IGNORE 0     // new notes are ignored
-#define  FULL_VOICE_OLDEST 1     // new notes will replace the oldest
+/******** MIDI player status messages ********/
+typedef enum {
+   OK = 0,           // function executed successfully
+   ERR_FILE_OPEN,    // file could not be opened (file not found, etc)
+   ERR_FILE_BAD,     // file failed format checks (magicnum, etc)
+   ERR_NOT_INITED,   // the OPL3 driver hasn't been initialized yet
+} STATUS;
 
 /******** OPL3 driver functions ********/
 
 // initializes the OPL3 driver (must be called before any other functions)
-int      OPL3_Init ();
+STATUS   Init ();
 // loads an OPL3 patch bank from a file
-int      OPL3_LoadPatchBank ( char * fileName, BOOL overlay );
+STATUS   LoadPatchBank ( char * fileName, bool overlay );
 // sends a Note-Off command to the driver
-void     OPL3_NoteOff ( BYTE chan, BYTE key, BYTE velocity );
+void     NoteOff ( Byte chan, Byte key, Byte velocity );
 // sends a Note-On command to the driver
-void     OPL3_NoteOn ( BYTE chan, BYTE key, BYTE velocity );
+void     NoteOn ( Byte chan, Byte key, Byte velocity );
 // sends an Aftertouch Key command to the driver
-void     OPL3_AftertouchKey ( BYTE chan, BYTE key, BYTE pressure );
+void     AftertouchKey ( Byte chan, Byte key, Byte pressure );
 // sends an Aftertouch Channel command to the driver
-void     OPL3_AftertouchChan ( BYTE chan, BYTE pressure );
+void     AftertouchChan ( Byte chan, Byte pressure );
 // sends a Controller Change command to the driver
-void     OPL3_ControllerChange ( BYTE chan, BYTE number, BYTE value );
+void     ControllerChange ( Byte chan, Byte number, Byte value );
 // sends a Program Change command to the driver
-void     OPL3_ProgramChange ( BYTE chan, BYTE program );
+void     ProgramChange ( Byte chan, Byte program );
 // sends a Pitch Bend command to the driver
-void     OPL3_PitchBend ( BYTE chan, BYTE lsb, BYTE msb );
+void     PitchBend ( Byte chan, Byte lsb, Byte msb );
 // forcibly turns off all notes
-void     OPL3_AllNotesOff ();
+void     AllNotesOff ();
 // resets a channel's controllers
-void     OPL3_ResetChanControllers ( BYTE chan );
-// sets the driver's behavior for note-ons when all voices are in use
-int      OPL3_SetFullVoiceMode ( BYTE mode );
+void     ResetChanControllers ( Byte chan );
 
+};    // end OPL3 namespace
 
 #endif
